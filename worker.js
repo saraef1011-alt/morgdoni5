@@ -1,1233 +1,2732 @@
-const ORIGIN = 'https://raw.githubusercontent.com/saraef1011-alt/index/main/';
+// worker.js
+// مرغ‌دونی — Cloudflare Worker + Durable Object
+// تبدیل‌شده از server.js + db.js اصلی پروژه
+
+const MAX_AVATAR_LENGTH = 300000;
+const MAX_USERNAME_LENGTH = 20;
 
 const SOCKET_SHIM = `
 class MorgdoniSocket {
-  constructor() {
-    this.events = {};
-    this.id = crypto.randomUUID();
+    constructor() {
+        this.events = {};
+        this.id = crypto.randomUUID();
 
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    this.ws = new WebSocket(protocol + '//' + location.host + '/ws?room=lobby');
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        this.ws = new WebSocket(
+            protocol + '//' + location.host + '/ws?room=lobby'
+        );
 
-    this.ws.onopen = () => this.emitLocal('connect');
+        this.ws.onopen = () => this.emitLocal('connect');
 
-    this.ws.onmessage = (e) => {
-      let m;
-      try {
-        m = JSON.parse(e.data);
-      } catch {
-        return;
-      }
+        this.ws.onmessage = (event) => {
+            let msg;
+            try {
+                msg = JSON.parse(event.data);
+            } catch {
+                return;
+            }
 
-      if (m && m.type) {
-        this.emitLocal(m.type, m.data, m);
-      }
-    };
+            if (msg && msg.type) {
+                this.emitLocal(msg.type, msg.data);
+            }
+        };
 
-    this.ws.onclose = () => this.emitLocal('disconnect');
-
-    this.ws.onerror = (e) => {
-      this.emitLocal('connect_error', e);
-    };
-  }
-
-  on(event, callback) {
-    (this.events[event] ??= []).push(callback);
-    return this;
-  }
-
-  emit(event, data) {
-    const send = () => {
-      if (this.ws.readyState === 1) {
-        this.ws.send(JSON.stringify({
-          type: event,
-          data: data ?? null
-        }));
-      }
-    };
-
-    if (this.ws.readyState === 1) {
-      send();
-    } else {
-      this.ws.addEventListener('open', send, { once: true });
+        this.ws.onclose = () => this.emitLocal('disconnect');
+        this.ws.onerror = (e) => this.emitLocal('connect_error', e);
     }
-  }
 
-  emitLocal(event, data, full) {
-    for (const callback of this.events[event] || []) {
-      try {
-        callback(data !== undefined ? data : full);
-      } catch (err) {
-        console.error(err);
-      }
+    on(event, callback) {
+        (this.events[event] ??= []).push(callback);
+        return this;
     }
-  }
 
-  disconnect() {
-    this.ws?.close();
-  }
+    emit(event, data) {
+        const send = () => {
+            if (this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify({
+                    type: event,
+                    data: data ?? null
+                }));
+            }
+        };
+
+        if (this.ws.readyState === WebSocket.OPEN) {
+            send();
+        } else {
+            this.ws.addEventListener('open', send, { once: true });
+        }
+    }
+
+    emitLocal(event, data) {
+        for (const callback of this.events[event] || []) {
+            try {
+                callback(data);
+            } catch (err) {
+                console.error(err);
+            }
+        }
+    }
+
+    disconnect() {
+        this.ws?.close();
+    }
 }
 
-window.io = () => new MorgdoniSocket();
+window.io = function () {
+    return new MorgdoniSocket();
+};
 `;
+
+
+/* =========================================================
+   DURABLE OBJECT
+========================================================= */
 
 export class GameRoom {
 
-  constructor(state) {
-    this.state = state;
-    this.sessions = new Map();
-    this.ready = this.load();
-  }
-
-  async load() {
-    this.data =
-      await this.state.storage.get('data') ||
-      {
-        rooms: {},
-        online: {},
-        profiles: {}
-      };
-  }
-
-  async save() {
-    await this.state.storage.put('data', this.data);
-  }
-
-  send(ws, type, data) {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type,
-        data
-      }));
-    }
-  }
-
-  broadcastRoom(room, type, data) {
-    for (const player of room.players) {
-      const ws = this.sessions.get(player.socketId);
-
-      if (ws) {
-        this.send(ws, type, data);
-      }
-    }
-  }
-
-  broadcast(type, data) {
-    for (const ws of this.sessions.values()) {
-      this.send(ws, type, data);
-    }
-  }
-
-  publicPlayers() {
-    return Object.entries(this.data.online).map(([id, player]) => ({
-      id,
-      ...player
-    }));
-  }
-
-  deck() {
-    const cards = [];
-
-    for (const [type, count] of [
-      ['مرغ', 21],
-      ['خروس', 21],
-      ['لانه', 12],
-      ['روباه', 7],
-      ['تله', 3],
-      ['مار', 2]
-    ]) {
-      for (let i = 0; i < count; i++) {
-        cards.push(type);
-      }
+    constructor(state) {
+        this.state = state;
+        this.sessions = new Map();
+        this.ready = this.load();
     }
 
-    for (let i = cards.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cards[i], cards[j]] = [cards[j], cards[i]];
+
+    async load() {
+        this.data =
+            await this.state.storage.get('data') ||
+            {
+                rooms: {},
+                onlinePlayers: {},
+                accounts: {},
+                pendingRequests: {}
+            };
     }
 
-    return cards;
-  }
 
-  profile(id, name = 'بازیکن', avatar = '🐔') {
-    return this.data.profiles[id] ?? (
-      this.data.profiles[id] = {
-        accountId: id,
-        username: name,
-        avatar,
-        gamesPlayed: 0,
-        wins: 0,
-        losses: 0
-      }
-    );
-  }
+    async save() {
+        await this.state.storage.put('data', this.data);
+    }
 
-  newRoom(players) {
-    const roomId =
-      Math.random()
-        .toString(36)
-        .slice(2, 8)
-        .toUpperCase();
 
-    const room = {
-      host: players[0].socketId,
-
-      players: players.map(player => ({
-        ...player,
-        hand: [],
-        eggs: 0,
-        chicks: 0
-      })),
-
-      gameStarted: true,
-      deck: this.deck(),
-      eggTokens: 18,
-      currentTurn: null,
-      winner: null,
-      discardPile: []
-    };
-
-    for (const player of room.players) {
-      for (let i = 0; i < 4; i++) {
-        if (room.deck.length) {
-          player.hand.push(room.deck.pop());
+    send(ws, type, data) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type,
+                data
+            }));
         }
-      }
     }
 
-    room.currentTurn = room.players[0].socketId;
 
-    this.data.rooms[roomId] = room;
-
-    for (const player of room.players) {
-      this.send(
-        this.sessions.get(player.socketId),
-        'gameStarted',
-        { roomId }
-      );
+    sendTo(socketId, type, data) {
+        this.send(this.sessions.get(socketId), type, data);
     }
 
-    this.broadcastRoom(room, 'gameState', room);
 
-    return roomId;
-  }
-
-  finish(room) {
-    const winner =
-      room.players.find(player => player.chicks >= 3);
-
-    if (!winner || room.winner) return;
-
-    room.winner = winner.socketId;
-
-    const winnerProfile =
-      this.data.profiles[winner.accountId];
-
-    if (winnerProfile) {
-      winnerProfile.wins++;
+    broadcast(type, data) {
+        for (const ws of this.sessions.values()) {
+            this.send(ws, type, data);
+        }
     }
 
-    for (const player of room.players) {
-      const profile =
-        this.data.profiles[player.accountId];
 
-      if (!profile) continue;
+    broadcastRoom(roomId, type, data) {
+        const room = this.data.rooms[roomId];
 
-      profile.gamesPlayed++;
+        if (!room) return;
 
-      if (player.socketId !== winner.socketId) {
-        profile.losses++;
-      }
-    }
-  }
+        const ids = new Set([
+            ...(room.players || []).map(p => p.id),
+            ...(room.watchers || [])
+        ]);
 
-  async fetch(request) {
-    await this.ready;
-
-    if (
-      request.headers.get('Upgrade') !==
-      'websocket'
-    ) {
-      return new Response(
-        'WebSocket endpoint',
-        { status: 426 }
-      );
+        for (const id of ids) {
+            this.sendTo(id, type, data);
+        }
     }
 
-    const pair = new WebSocketPair();
 
-    const client = pair[0];
-    const ws = pair[1];
+    updatePlayerList() {
+        const list = Object.values(this.data.onlinePlayers)
+            .map(p => ({
+                id: p.id,
+                name: p.name,
+                status: p.status,
+                socketId: p.socketId,
+                avatar: p.avatar || '🐔'
+            }));
 
-    ws.accept();
-
-    const sessionId = crypto.randomUUID();
-
-    this.sessions.set(sessionId, ws);
-
-    ws.addEventListener(
-      'message',
-      event => this.onMessage(
-        sessionId,
-        event.data
-      )
-    );
-
-    ws.addEventListener(
-      'close',
-      () => this.onClose(sessionId)
-    );
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client
-    });
-  }
-
-  async onMessage(sessionId, raw) {
-
-    await this.ready;
-
-    let message;
-
-    try {
-      message = JSON.parse(raw);
-    } catch {
-      return this.send(
-        this.sessions.get(sessionId),
-        'error',
-        'درخواست نامعتبر'
-      );
+        this.broadcast('playerListUpdate', list);
     }
 
-    const data = message.data || {};
-    const ws = this.sessions.get(sessionId);
 
-    /* پروفایل */
+    createDeck() {
 
-    if (message.type === 'loadProfile') {
+        const deck = [];
 
-      this.send(ws, 'profileData', {
-        profile:
-          this.data.profiles[data.accountId] || null
-      });
+        for (let i = 0; i < 21; i++)
+            deck.push('مرغ');
 
-      return;
+        for (let i = 0; i < 21; i++)
+            deck.push('خروس');
+
+        for (let i = 0; i < 12; i++)
+            deck.push('لانه');
+
+        for (let i = 0; i < 7; i++)
+            deck.push('روباه');
+
+        for (let i = 0; i < 3; i++)
+            deck.push('تله');
+
+        for (let i = 0; i < 2; i++)
+            deck.push('مار');
+
+        return this.shuffle(deck);
     }
 
-    if (message.type === 'saveProfile') {
 
-      if (
-        !data.accountId ||
-        !data.username ||
-        String(data.username).trim().length < 2
-      ) {
-        return this.send(
-          ws,
-          'profileError',
-          'نام کاربری معتبر نیست'
-        );
-      }
+    shuffle(arr) {
 
-      const profile = this.profile(
-        data.accountId,
-        String(data.username).trim(),
-        data.avatar || '🐔'
-      );
+        for (let i = arr.length - 1; i > 0; i--) {
 
-      profile.username =
-        String(data.username).trim();
+            const j = Math.floor(Math.random() * (i + 1));
 
-      profile.avatar =
-        data.avatar || profile.avatar;
+            [arr[i], arr[j]] =
+                [arr[j], arr[i]];
+        }
 
-      await this.save();
-
-      this.send(ws, 'profileData', {
-        profile
-      });
-
-      return;
+        return arr;
     }
 
-    /* ورود بازیکن */
 
-    if (message.type === 'registerPlayer') {
+    getAccount(accountId) {
 
-      const profile = this.profile(
-        data.accountId || sessionId,
-        data.playerName || 'بازیکن',
-        data.avatar || '🐔'
-      );
+        if (!accountId) return null;
 
-      this.data.online[sessionId] = {
-        name: profile.username,
-        accountId: profile.accountId,
-        avatar: profile.avatar,
-        status: 'ready'
-      };
-
-      this.send(ws, 'registrationSuccess', {
-        id: sessionId,
-        name: profile.username
-      });
-
-      this.broadcast(
-        'playerListUpdate',
-        this.publicPlayers()
-      );
-
-      await this.save();
-
-      return;
+        return this.data.accounts[accountId] || null;
     }
 
-    /* پروفایل بازیکن */
 
-    if (message.type === 'getProfile') {
+    isValidUsername(username) {
 
-      const online =
-        this.data.online[data.targetId];
-
-      if (!online) {
-        return this.send(
-          ws,
-          'profileInfoError',
-          'بازیکن آنلاین نیست'
-        );
-      }
-
-      const profile =
-        this.profile(
-          online.accountId,
-          online.name,
-          online.avatar
-        );
-
-      this.send(ws, 'profileInfo', {
-        name: profile.username,
-        avatar: profile.avatar,
-        gamesPlayed: profile.gamesPlayed,
-        wins: profile.wins,
-        losses: profile.losses
-      });
-
-      return;
+        return typeof username === 'string' &&
+            username.trim().length >= 2 &&
+            username.trim().length <= MAX_USERNAME_LENGTH;
     }
 
-    /* ساخت اتاق */
 
-    if (message.type === 'createRoom') {
+    isValidAvatar(avatar) {
 
-      const roomId =
-        String(
-          data.roomId ||
-          Math.random()
-            .toString(36)
-            .slice(2, 8)
-        ).toUpperCase();
+        if (typeof avatar !== 'string' ||
+            avatar.length === 0) {
+            return false;
+        }
 
-      if (this.data.rooms[roomId]) {
-        return this.send(
-          ws,
-          'roomError',
-          'اتاق قبلاً وجود دارد'
-        );
-      }
+        if (avatar.length > MAX_AVATAR_LENGTH) {
+            return false;
+        }
 
-      const online =
-        this.data.online[sessionId] || {
-          accountId: sessionId,
-          name: data.playerName || 'بازیکن',
-          avatar: '🐔'
-        };
+        if (!avatar.startsWith('data:')) {
+            return avatar.length <= 8;
+        }
 
-      this.data.rooms[roomId] = {
-        host: sessionId,
-
-        players: [{
-          socketId: sessionId,
-          id: sessionId,
-          name: data.playerName || online.name,
-          accountId: online.accountId,
-          avatar: online.avatar,
-          hand: [],
-          eggs: 0,
-          chicks: 0
-        }],
-
-        gameStarted: false,
-        deck: this.deck(),
-        eggTokens: 18,
-        currentTurn: null,
-        winner: null,
-        discardPile: []
-      };
-
-      if (this.data.online[sessionId]) {
-        this.data.online[sessionId].status = 'room';
-      }
-
-      await this.save();
-
-      this.send(ws, 'roomCreated', {
-        roomId
-      });
-
-      this.broadcastRoom(
-        this.data.rooms[roomId],
-        'roomUpdate',
-        this.data.rooms[roomId]
-      );
-
-      this.broadcast(
-        'playerListUpdate',
-        this.publicPlayers()
-      );
-
-      return;
+        return /^data:image\/(png|jpeg|jpg|webp|gif);base64,/.test(avatar);
     }
 
-    /* ورود به اتاق */
 
-    if (message.type === 'joinRoom') {
+    usernameTaken(username, excludingAccountId) {
 
-      const room =
-        this.data.rooms[
-          String(data.roomId || '').toUpperCase()
-        ];
+        const name = username.trim();
 
-      if (!room) {
-        return this.send(
-          ws,
-          'roomError',
-          'اتاق پیدا نشد'
-        );
-      }
-
-      if (room.players.length >= 2) {
-        return this.send(
-          ws,
-          'roomError',
-          'اتاق پر است'
-        );
-      }
-
-      const online =
-        this.data.online[sessionId] || {
-          accountId: sessionId,
-          name: data.playerName || 'بازیکن',
-          avatar: '🐔'
-        };
-
-      room.players.push({
-        socketId: sessionId,
-        id: sessionId,
-        name: data.playerName || online.name,
-        accountId: online.accountId,
-        avatar: online.avatar,
-        hand: [],
-        eggs: 0,
-        chicks: 0
-      });
-
-      if (this.data.online[sessionId]) {
-        this.data.online[sessionId].status = 'room';
-      }
-
-      await this.save();
-
-      this.broadcastRoom(
-        room,
-        'roomUpdate',
-        room
-      );
-
-      return;
-    }
-
-    /* شروع بازی */
-
-    if (message.type === 'startGame') {
-
-      const room =
-        this.data.rooms[
-          String(data.roomId || '').toUpperCase()
-        ];
-
-      if (
-        !room ||
-        room.host !== sessionId ||
-        room.players.length < 2
-      ) return;
-
-      room.gameStarted = true;
-      room.deck = this.deck();
-
-      room.players.forEach(player => {
-
-        player.hand = [];
-        player.eggs = 0;
-        player.chicks = 0;
-
-        for (let i = 0; i < 4; i++) {
-          if (room.deck.length) {
-            player.hand.push(
-              room.deck.pop()
+        return Object.values(this.data.accounts)
+            .some(account =>
+                account.username === name &&
+                account.accountId !== excludingAccountId
             );
-          }
-        }
-      });
-
-      room.currentTurn =
-        room.players[0].socketId;
-
-      await this.save();
-
-      this.broadcastRoom(
-        room,
-        'gameState',
-        room
-      );
-
-      return;
     }
 
-    /* وضعیت بازی */
 
-    if (message.type === 'getGameState') {
+    createOrUpdateAccount(accountId, username, avatar) {
 
-      const room =
-        this.data.rooms[
-          String(data.roomId || '').toUpperCase()
-        ];
+        let account = this.data.accounts[accountId];
 
-      if (room) {
-        this.send(
-          ws,
-          'gameState',
-          room
-        );
-      }
+        if (account) {
 
-      return;
-    }
+            if (username) {
+                account.username = username.trim();
+            }
 
-    /* بازی سریع */
-
-    if (message.type === 'quickGame') {
-
-      const me =
-        this.data.online[sessionId];
-
-      const other =
-        Object.entries(this.data.online)
-          .find(
-            ([id, player]) =>
-              id !== sessionId &&
-              player.status === 'ready'
-          );
-
-      if (!me) {
-        return this.send(
-          ws,
-          'quickGameError',
-          'ابتدا وارد لابی شو'
-        );
-      }
-
-      if (!other) {
-        return this.send(
-          ws,
-          'quickGameError',
-          'منتظر بازیکن دیگری بمان...'
-        );
-      }
-
-      this.newRoom([
-        {
-          socketId: sessionId,
-          name: me.name,
-          accountId: me.accountId,
-          avatar: me.avatar
-        },
-        {
-          socketId: other[0],
-          name: other[1].name,
-          accountId: other[1].accountId,
-          avatar: other[1].avatar
-        }
-      ]);
-
-      return;
-    }
-
-    /* عملیات بازی */
-
-    if (message.type === 'gameAction') {
-
-      const room =
-        this.data.rooms[
-          String(data.roomId || '').toUpperCase()
-        ];
-
-      if (
-        !room ||
-        !room.gameStarted ||
-        room.winner
-      ) return;
-
-      const player =
-        room.players.find(
-          p => p.socketId === sessionId
-        );
-
-      if (
-        !player ||
-        room.currentTurn !== sessionId
-      ) return;
-
-      const opponent =
-        room.players.find(
-          p =>
-            p.socketId === data.data?.target &&
-            p.socketId !== sessionId
-        ) ||
-        room.players.find(
-          p => p.socketId !== sessionId
-        );
-
-      let done = false;
-
-      const action = data.action;
-
-      /* تخم */
-
-      if (action === 'lay') {
-
-        const indexes = [
-          'مرغ',
-          'خروس',
-          'لانه'
-        ].map(
-          card => player.hand.indexOf(card)
-        );
-
-        if (
-          indexes.every(i => i >= 0) &&
-          room.eggTokens
-        ) {
-
-          indexes
-            .sort((a, b) => b - a)
-            .forEach(
-              i => player.hand.splice(i, 1)
-            );
-
-          player.eggs++;
-          room.eggTokens--;
-
-          done = true;
-        }
-      }
-
-      /* جوجه */
-
-      if (
-        action === 'hatch' &&
-        player.eggs > 0 &&
-        player.hand.filter(
-          x => x === 'مرغ'
-        ).length >= 2
-      ) {
-
-        let removed = 0;
-
-        for (
-          let i = 0;
-          i < player.hand.length &&
-          removed < 2;
-          i++
-        ) {
-
-          if (player.hand[i] === 'مرغ') {
-            player.hand.splice(i, 1);
-            i--;
-            removed++;
-          }
-        }
-
-        player.eggs--;
-        player.chicks++;
-
-        done = true;
-      }
-
-      /* برداشتن کارت */
-
-      if (
-        action === 'draw' &&
-        room.deck.length
-      ) {
-        player.hand.push(
-          room.deck.pop()
-        );
-
-        done = true;
-      }
-
-      /* دور انداختن */
-
-      if (action === 'discard') {
-
-        const index =
-          player.hand.indexOf(
-            data.data?.card
-          );
-
-        if (index >= 0) {
-
-          room.discardPile.push(
-            player.hand.splice(
-              index,
-              1
-            )[0]
-          );
-
-          done = true;
-        }
-      }
-
-      /* روباه */
-
-      if (action === 'fox') {
-
-        const index =
-          player.hand.indexOf('روباه');
-
-        if (
-          index >= 0 &&
-          opponent?.eggs > 0
-        ) {
-
-          player.hand.splice(index, 1);
-
-          opponent.eggs--;
-          player.eggs++;
-
-          done = true;
-        }
-      }
-
-      /* مار */
-
-      if (action === 'snake') {
-
-        const index =
-          player.hand.indexOf('مار');
-
-        const count =
-          Math.min(
-            2,
-            Math.max(
-              1,
-              Number(data.data?.count) || 1
-            )
-          );
-
-        if (
-          index >= 0 &&
-          opponent?.eggs > 0
-        ) {
-
-          player.hand.splice(index, 1);
-
-          const stolen =
-            Math.min(
-              count,
-              opponent.eggs
-            );
-
-          opponent.eggs -= stolen;
-          room.eggTokens += stolen;
-
-          done = true;
-        }
-      }
-
-      /* تله */
-
-      if (action === 'trap') {
-
-        const trapIndex =
-          player.hand.indexOf('تله');
-
-        const targetIndex =
-          opponent?.hand.indexOf(
-            data.data?.card
-          );
-
-        if (
-          trapIndex >= 0 &&
-          targetIndex >= 0
-        ) {
-
-          player.hand.splice(
-            trapIndex,
-            1
-          );
-
-          opponent.hand.splice(
-            targetIndex,
-            1
-          );
-
-          done = true;
-        }
-      }
-
-      /* پایان نوبت */
-
-      if (action === 'endTurn') {
-        done = true;
-      }
-
-      if (!done) return;
-
-      while (
-        player.hand.length < 4 &&
-        room.deck.length
-      ) {
-        player.hand.push(
-          room.deck.pop()
-        );
-      }
-
-      this.finish(room);
-
-      if (!room.winner) {
-
-        const index =
-          room.players.findIndex(
-            p =>
-              p.socketId ===
-              room.currentTurn
-          );
-
-        room.currentTurn =
-          room.players[
-            (index + 1) %
-            room.players.length
-          ].socketId;
-      }
-
-      await this.save();
-
-      this.broadcastRoom(
-        room,
-        'gameState',
-        room
-      );
-
-      return;
-    }
-
-    /* چت */
-
-    if (message.type === 'chatMessage') {
-
-      const room =
-        this.data.rooms[
-          String(data.roomId || '').toUpperCase()
-        ];
-
-      const player =
-        room?.players.find(
-          p => p.socketId === sessionId
-        );
-
-      if (player) {
-
-        this.broadcastRoom(
-          room,
-          'chatMessage',
-          {
-            sender: player.name,
-            message: data.message,
-            time: new Date()
-              .toLocaleTimeString()
-          }
-        );
-      }
-
-      return;
-    }
-
-    /* خروج */
-
-    if (message.type === 'leaveGame') {
-
-      for (
-        const [roomId, room]
-        of Object.entries(this.data.rooms)
-      ) {
-
-        const index =
-          room.players.findIndex(
-            p => p.socketId === sessionId
-          );
-
-        if (index >= 0) {
-
-          room.players.splice(
-            index,
-            1
-          );
-
-          if (!room.players.length) {
-
-            delete this.data.rooms[roomId];
-
-          } else {
-
-            room.host =
-              room.players[0].socketId;
-
-            room.currentTurn =
-              room.players[0].socketId;
-
-            this.broadcastRoom(
-              room,
-              'roomUpdate',
-              room
-            );
-          }
-        }
-      }
-
-      if (this.data.online[sessionId]) {
-        this.data.online[sessionId].status =
-          'ready';
-      }
-
-      await this.save();
-
-      this.broadcast(
-        'playerListUpdate',
-        this.publicPlayers()
-      );
-
-      return;
-    }
-  }
-
-  async onClose(sessionId) {
-
-    await this.ready;
-
-    for (
-      const [roomId, room]
-      of Object.entries(this.data.rooms)
-    ) {
-
-      const index =
-        room.players.findIndex(
-          p => p.socketId === sessionId
-        );
-
-      if (index >= 0) {
-
-        room.players.splice(
-          index,
-          1
-        );
-
-        if (!room.players.length) {
-
-          delete this.data.rooms[roomId];
+            if (avatar) {
+                account.avatar = avatar;
+            }
 
         } else {
 
-          room.host =
-            room.players[0].socketId;
+            account = {
+                accountId,
+                username:
+                    username ?
+                        username.trim() :
+                        'بازیکن',
 
-          room.currentTurn =
-            room.players[0].socketId;
+                avatar:
+                    avatar ||
+                    '🐔',
 
-          this.broadcastRoom(
-            room,
-            'roomUpdate',
-            room
-          );
+                gamesPlayed: 0,
+                wins: 0,
+                losses: 0,
+                createdAt: Date.now()
+            };
+
+            this.data.accounts[accountId] = account;
         }
-      }
+
+        return account;
     }
 
-    delete this.data.online[sessionId];
 
-    this.sessions.delete(sessionId);
+    recordGameResult(accountId, didWin) {
 
-    await this.save();
+        const account =
+            this.data.accounts[accountId];
 
-    this.broadcast(
-      'playerListUpdate',
-      this.publicPlayers()
-    );
-  }
+        if (!account) return null;
+
+        account.gamesPlayed =
+            (account.gamesPlayed || 0) + 1;
+
+        if (didWin) {
+
+            account.wins =
+                (account.wins || 0) + 1;
+
+        } else {
+
+            account.losses =
+                (account.losses || 0) + 1;
+        }
+
+        return account;
+    }
+
+
+    getRoomForPlayer(playerId) {
+
+        for (const [roomId, room]
+            of Object.entries(this.data.rooms)) {
+
+            if (
+                room.players?.some(
+                    p => p.id === playerId
+                )
+            ) {
+
+                return {
+                    roomId,
+                    room,
+                    role: 'player'
+                };
+            }
+
+
+            if (
+                room.watchers?.includes(playerId)
+            ) {
+
+                return {
+                    roomId,
+                    room,
+                    role: 'watcher'
+                };
+            }
+        }
+
+        return null;
+    }
+
+
+    playersShareRoom(idA, idB) {
+
+        for (const room of Object.values(this.data.rooms)) {
+
+            const hasA =
+                room.players?.some(
+                    p => p.id === idA
+                );
+
+            const hasB =
+                room.players?.some(
+                    p => p.id === idB
+                );
+
+            if (hasA && hasB) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+
+    removeFromQuickQueue(playerId) {
+
+        const player =
+            this.data.onlinePlayers[playerId];
+
+        if (player) {
+            player.quickQueue = false;
+        }
+    }
+
+
+    /* =====================================================
+       ساخت اتاق
+    ===================================================== */
+
+    createPrivateGameRoom(playerA, playerB) {
+
+        const roomId =
+            Math.random()
+                .toString(36)
+                .substring(2, 8)
+                .toUpperCase();
+
+
+        const room = {
+
+            host: playerA.id,
+
+            players: [
+                {
+                    id: playerA.id,
+                    name: playerA.name,
+                    accountId: playerA.accountId || null,
+                    avatar: playerA.avatar || '🐔',
+                    hand: [],
+                    eggs: 0,
+                    chicks: 0
+                },
+
+                {
+                    id: playerB.id,
+                    name: playerB.name,
+                    accountId: playerB.accountId || null,
+                    avatar: playerB.avatar || '🐔',
+                    hand: [],
+                    eggs: 0,
+                    chicks: 0
+                }
+            ],
+
+            gameStarted: false,
+
+            deck: this.createDeck(),
+
+            eggTokens: 18,
+
+            currentTurn: null,
+
+            winner: null,
+
+            discardPile: [],
+
+            watchers: []
+        };
+
+
+        this.data.rooms[roomId] = room;
+
+
+        playerA.status = 'playing';
+        playerB.status = 'playing';
+
+
+        this.startGameInRoom(roomId);
+
+
+        return roomId;
+    }
+
+
+    startGameInRoom(roomId) {
+
+        const room =
+            this.data.rooms[roomId];
+
+        if (!room) return;
+
+
+        room.gameStarted = true;
+
+
+        for (const player of room.players) {
+
+            player.hand = [];
+
+            player.eggs = 0;
+
+            player.chicks = 0;
+
+            for (let i = 0; i < 4; i++) {
+
+                if (room.deck.length > 0) {
+
+                    player.hand.push(
+                        room.deck.pop()
+                    );
+                }
+            }
+        }
+
+
+        room.currentTurn =
+            room.players[0].id;
+
+
+        this.broadcastRoom(
+            roomId,
+            'gameStarted',
+            { roomId }
+        );
+
+
+        this.broadcastRoom(
+            roomId,
+            'gameState',
+            room
+        );
+    }
+
+
+    /* =====================================================
+       پیام‌های WebSocket
+    ===================================================== */
+
+    async onMessage(sid, raw) {
+
+        await this.ready;
+
+        let message;
+
+        try {
+            message =
+                JSON.parse(raw);
+
+        } catch {
+
+            this.sendTo(
+                sid,
+                'error',
+                'درخواست نامعتبر است'
+            );
+
+            return;
+        }
+
+
+        const type =
+            message.type;
+
+        const d =
+            message.data || {};
+
+
+        /* ================================================
+           PROFILE
+        ================================================= */
+
+        if (type === 'loadProfile') {
+
+            const profile =
+                this.getAccount(
+                    d.accountId
+                );
+
+            this.sendTo(
+                sid,
+                'profileData',
+                { profile }
+            );
+
+            return;
+        }
+
+
+        if (type === 'saveProfile') {
+
+            if (!d.accountId) {
+
+                this.sendTo(
+                    sid,
+                    'profileError',
+                    'شناسه حساب نامعتبر است'
+                );
+
+                return;
+            }
+
+
+            if (!this.isValidUsername(d.username)) {
+
+                this.sendTo(
+                    sid,
+                    'profileError',
+                    'نام کاربری باید بین ۲ تا ۲۰ کاراکتر باشد'
+                );
+
+                return;
+            }
+
+
+            if (
+                d.avatar &&
+                !this.isValidAvatar(d.avatar)
+            ) {
+
+                this.sendTo(
+                    sid,
+                    'profileError',
+                    'آواتار نامعتبر است یا حجم آن زیاد است'
+                );
+
+                return;
+            }
+
+
+            if (
+                this.usernameTaken(
+                    d.username,
+                    d.accountId
+                )
+            ) {
+
+                this.sendTo(
+                    sid,
+                    'profileError',
+                    'این نام کاربری قبلاً استفاده شده است'
+                );
+
+                return;
+            }
+
+
+            const profile =
+                this.createOrUpdateAccount(
+                    d.accountId,
+                    d.username,
+                    d.avatar
+                );
+
+
+            const online =
+                this.data.onlinePlayers[sid];
+
+
+            if (
+                online &&
+                online.accountId === d.accountId
+            ) {
+
+                online.name =
+                    profile.username;
+
+                online.avatar =
+                    profile.avatar;
+            }
+
+
+            await this.save();
+
+
+            this.sendTo(
+                sid,
+                'profileData',
+                { profile }
+            );
+
+
+            this.updatePlayerList();
+
+            return;
+        }
+
+
+        if (type === 'getProfile') {
+
+            const target =
+                this.data.onlinePlayers[
+                    d.targetId
+                ];
+
+
+            if (!target) {
+
+                this.sendTo(
+                    sid,
+                    'profileInfoError',
+                    'بازیکن یافت نشد'
+                );
+
+                return;
+            }
+
+
+            const account =
+                target.accountId ?
+                    this.getAccount(
+                        target.accountId
+                    ) :
+                    null;
+
+
+            this.sendTo(
+                sid,
+                'profileInfo',
+                {
+
+                    id: target.id,
+
+                    name: target.name,
+
+                    avatar:
+                        target.avatar ||
+                        '🐔',
+
+                    gamesPlayed:
+                        account?.gamesPlayed || 0,
+
+                    wins:
+                        account?.wins || 0,
+
+                    losses:
+                        account?.losses || 0
+                }
+            );
+
+            return;
+        }
+
+
+        /* ================================================
+           REGISTER
+        ================================================= */
+
+        if (type === 'registerPlayer') {
+
+            const name =
+                String(
+                    d.playerName ||
+                    'بازیکن'
+                ).trim();
+
+
+            const accountId =
+                d.accountId ||
+                sid;
+
+
+            const existing =
+                Object.values(
+                    this.data.onlinePlayers
+                ).find(
+                    p =>
+                        p.name === name &&
+                        p.id !== sid
+                );
+
+
+            if (existing) {
+
+                this.sendTo(
+                    sid,
+                    'registrationError',
+                    'این نام قبلاً توسط بازیکن دیگری استفاده می‌شود'
+                );
+
+                return;
+            }
+
+
+            let account =
+                this.getAccount(
+                    accountId
+                );
+
+
+            if (!account) {
+
+                account =
+                    this.createOrUpdateAccount(
+                        accountId,
+                        name,
+                        d.avatar || '🐔'
+                    );
+            }
+
+
+            this.data.onlinePlayers[sid] = {
+
+                id: sid,
+
+                name:
+                    account.username ||
+                    name,
+
+                status: 'ready',
+
+                socketId: sid,
+
+                accountId,
+
+                avatar:
+                    account.avatar ||
+                    d.avatar ||
+                    '🐔',
+
+                quickQueue: false
+            };
+
+
+            await this.save();
+
+
+            this.sendTo(
+                sid,
+                'registrationSuccess',
+                {
+                    id: sid,
+                    name:
+                        this.data.onlinePlayers[sid]
+                            .name
+                }
+            );
+
+
+            this.updatePlayerList();
+
+            return;
+        }
+
+
+        if (type === 'getPlayerList') {
+
+            this.updatePlayerList();
+
+            return;
+        }
+
+
+        /* ================================================
+           GAME REQUEST
+        ================================================= */
+
+        if (type === 'requestGame') {
+
+            const player =
+                this.data.onlinePlayers[sid];
+
+            const target =
+                this.data.onlinePlayers[
+                    d.targetId
+                ];
+
+
+            if (!player || !target) {
+
+                this.sendTo(
+                    sid,
+                    'gameRequestError',
+                    'بازیکن مورد نظر یافت نشد'
+                );
+
+                return;
+            }
+
+
+            if (!this.data.pendingRequests[d.targetId]) {
+
+                this.data.pendingRequests[d.targetId] = [];
+            }
+
+
+            this.data.pendingRequests[d.targetId] =
+                this.data.pendingRequests[d.targetId]
+                    .filter(
+                        r => r.fromId !== sid
+                    );
+
+
+            this.data.pendingRequests[d.targetId]
+                .push({
+
+                    fromId: sid,
+
+                    fromName: player.name,
+
+                    timestamp: Date.now()
+                });
+
+
+            this.removeFromQuickQueue(sid);
+
+
+            player.status =
+                'requesting';
+
+
+            await this.save();
+
+
+            this.updatePlayerList();
+
+
+            this.sendTo(
+                d.targetId,
+                'gameRequest',
+                {
+                    fromId: sid,
+                    fromName: player.name
+                }
+            );
+
+            return;
+        }
+
+
+        if (type === 'rejectGame') {
+
+            const player =
+                this.data.onlinePlayers[sid];
+
+            const requester =
+                this.data.onlinePlayers[d.fromId];
+
+
+            if (
+                this.data.pendingRequests[sid]
+            ) {
+
+                this.data.pendingRequests[sid] =
+                    this.data.pendingRequests[sid]
+                        .filter(
+                            r =>
+                                r.fromId !== d.fromId
+                        );
+            }
+
+
+            if (
+                player &&
+                player.status === 'requested'
+            ) {
+                player.status = 'ready';
+            }
+
+
+            if (
+                requester &&
+                requester.status === 'requesting'
+            ) {
+                requester.status = 'ready';
+            }
+
+
+            await this.save();
+
+
+            this.sendTo(
+                d.fromId,
+                'gameRejected',
+                {
+                    byName:
+                        player?.name ||
+                        'بازیکن'
+                }
+            );
+
+
+            this.updatePlayerList();
+
+            return;
+        }
+
+
+        /* ================================================
+           ACCEPT GAME
+        ================================================= */
+
+        if (type === 'acceptGame') {
+
+            const player =
+                this.data.onlinePlayers[sid];
+
+            const requester =
+                this.data.onlinePlayers[d.fromId];
+
+
+            if (!player || !requester) {
+
+                this.sendTo(
+                    sid,
+                    'gameError',
+                    'بازیکن یافت نشد'
+                );
+
+                return;
+            }
+
+
+            if (
+                this.data.pendingRequests[sid]
+            ) {
+
+                this.data.pendingRequests[sid] =
+                    this.data.pendingRequests[sid]
+                        .filter(
+                            r =>
+                                r.fromId !== d.fromId
+                        );
+            }
+
+
+            this.removeFromQuickQueue(
+                d.fromId
+            );
+
+
+            const current =
+                this.getRoomForPlayer(sid);
+
+
+            if (
+                current &&
+                current.role === 'player'
+            ) {
+
+                this.sendTo(
+                    sid,
+                    'busyGameChoice',
+                    {
+                        fromId: d.fromId,
+
+                        fromName:
+                            requester.name,
+
+                        roomId:
+                            current.roomId,
+
+                        message:
+                            `${requester.name} می‌خواهد وارد بازی شما شود`
+                    }
+                );
+
+                return;
+            }
+
+
+            player.status = 'playing';
+
+            requester.status = 'playing';
+
+
+            const roomId =
+                this.createPrivateGameRoom(
+                    requester,
+                    player
+                );
+
+
+            await this.save();
+
+
+            this.updatePlayerList();
+
+
+            this.sendTo(
+                requester.id,
+                'gameStarted',
+                { roomId }
+            );
+
+
+            this.sendTo(
+                player.id,
+                'gameStarted',
+                { roomId }
+            );
+
+            return;
+        }
+
+
+        /* ================================================
+           QUICK GAME
+        ================================================= */
+
+        if (type === 'quickGame') {
+
+            const player =
+                this.data.onlinePlayers[sid];
+
+
+            if (!player) {
+
+                this.sendTo(
+                    sid,
+                    'quickGameError',
+                    'بازیکن یافت نشد'
+                );
+
+                return;
+            }
+
+
+            if (player.status !== 'ready') {
+
+                this.sendTo(
+                    sid,
+                    'quickGameError',
+                    'ابتدا باید آماده باشید'
+                );
+
+                return;
+            }
+
+
+            player.status =
+                'requesting';
+
+            player.quickQueue = true;
+
+
+            const waiting =
+                Object.values(
+                    this.data.onlinePlayers
+                )
+                .filter(
+                    p =>
+                        p.status === 'requesting' &&
+                        p.quickQueue
+                );
+
+
+            if (waiting.length >= 2) {
+
+                const a = waiting[0];
+
+                const b = waiting[1];
+
+
+                a.quickQueue = false;
+
+                b.quickQueue = false;
+
+                a.status = 'playing';
+
+                b.status = 'playing';
+
+
+                const roomId =
+                    this.createPrivateGameRoom(
+                        a,
+                        b
+                    );
+
+
+                await this.save();
+
+
+                this.updatePlayerList();
+
+
+                this.sendTo(
+                    a.id,
+                    'gameStarted',
+                    { roomId }
+                );
+
+                this.sendTo(
+                    b.id,
+                    'gameStarted',
+                    { roomId }
+                );
+
+            } else {
+
+                this.sendTo(
+                    sid,
+                    'quickGameQueued'
+                );
+
+                await this.save();
+
+                this.updatePlayerList();
+            }
+
+            return;
+        }
+
+
+        /* ================================================
+           CREATE ROOM
+        ================================================= */
+
+        if (type === 'createRoom') {
+
+            const roomId =
+                String(
+                    d.roomId ||
+                    Math.random()
+                        .toString(36)
+                        .slice(2, 8)
+                )
+                .toUpperCase();
+
+
+            if (this.data.rooms[roomId]) {
+
+                this.sendTo(
+                    sid,
+                    'roomError',
+                    'اتاق قبلاً وجود دارد'
+                );
+
+                return;
+            }
+
+
+            const online =
+                this.data.onlinePlayers[sid];
+
+
+            const room = {
+
+                host: sid,
+
+                players: [
+
+                    {
+
+                        id: sid,
+
+                        name:
+                            d.playerName ||
+                            online?.name ||
+                            'بازیکن',
+
+                        accountId:
+                            online?.accountId ||
+                            sid,
+
+                        avatar:
+                            online?.avatar ||
+                            '🐔',
+
+                        hand: [],
+
+                        eggs: 0,
+
+                        chicks: 0
+                    }
+                ],
+
+                gameStarted: false,
+
+                deck: this.createDeck(),
+
+                eggTokens: 18,
+
+                currentTurn: null,
+
+                winner: null,
+
+                discardPile: [],
+
+                watchers: []
+            };
+
+
+            this.data.rooms[roomId] =
+                room;
+
+
+            if (online) {
+                online.status = 'room';
+            }
+
+
+            await this.save();
+
+
+            this.sendTo(
+                sid,
+                'roomCreated',
+                { roomId }
+            );
+
+
+            this.broadcastRoom(
+                roomId,
+                'roomUpdate',
+                room
+            );
+
+
+            this.updatePlayerList();
+
+            return;
+        }
+
+
+        /* ================================================
+           JOIN ROOM
+        ================================================= */
+
+        if (type === 'joinRoom') {
+
+            const roomId =
+                String(
+                    d.roomId || ''
+                ).toUpperCase();
+
+
+            const room =
+                this.data.rooms[roomId];
+
+
+            if (!room) {
+
+                this.sendTo(
+                    sid,
+                    'roomError',
+                    'اتاق پیدا نشد'
+                );
+
+                return;
+            }
+
+
+            if (room.players.length >= 2) {
+
+                this.sendTo(
+                    sid,
+                    'roomError',
+                    'اتاق پر است'
+                );
+
+                return;
+            }
+
+
+            const online =
+                this.data.onlinePlayers[sid];
+
+
+            room.players.push({
+
+                id: sid,
+
+                name:
+                    d.playerName ||
+                    online?.name ||
+                    'بازیکن',
+
+                accountId:
+                    online?.accountId ||
+                    sid,
+
+                avatar:
+                    online?.avatar ||
+                    '🐔',
+
+                hand: [],
+
+                eggs: 0,
+
+                chicks: 0
+            });
+
+
+            if (online) {
+                online.status = 'room';
+            }
+
+
+            await this.save();
+
+
+            this.broadcastRoom(
+                roomId,
+                'roomUpdate',
+                room
+            );
+
+            return;
+        }
+
+
+        /* ================================================
+           START GAME
+        ================================================= */
+
+        if (type === 'startGame') {
+
+            const roomId =
+                String(
+                    d.roomId || ''
+                ).toUpperCase();
+
+
+            const room =
+                this.data.rooms[roomId];
+
+
+            if (
+                !room ||
+                room.host !== sid ||
+                room.players.length < 2
+            ) {
+                return;
+            }
+
+
+            this.startGameInRoom(roomId);
+
+
+            await this.save();
+
+            return;
+        }
+
+
+        if (type === 'getGameState') {
+
+            const room =
+                this.data.rooms[
+                    String(
+                        d.roomId || ''
+                    ).toUpperCase()
+                ];
+
+
+            if (room) {
+
+                this.sendTo(
+                    sid,
+                    'gameState',
+                    room
+                );
+            }
+
+            return;
+        }
+
+
+        /* ================================================
+           GAME ACTION
+        ================================================= */
+
+        if (type === 'gameAction') {
+
+            const roomId =
+                String(
+                    d.roomId || ''
+                ).toUpperCase();
+
+
+            const room =
+                this.data.rooms[roomId];
+
+
+            if (
+                !room ||
+                !room.gameStarted ||
+                room.winner
+            ) {
+                return;
+            }
+
+
+            const player =
+                room.players.find(
+                    p => p.id === sid
+                );
+
+
+            if (
+                !player ||
+                room.currentTurn !== sid
+            ) {
+                return;
+            }
+
+
+            let actionDone = false;
+
+
+            switch (d.action) {
+
+
+                /* =====================
+                   LAY
+                ===================== */
+
+                case 'lay': {
+
+                    const hen =
+                        player.hand.indexOf(
+                            'مرغ'
+                        );
+
+                    const rooster =
+                        player.hand.indexOf(
+                            'خروس'
+                        );
+
+                    const nest =
+                        player.hand.indexOf(
+                            'لانه'
+                        );
+
+
+                    if (
+                        hen !== -1 &&
+                        rooster !== -1 &&
+                        nest !== -1 &&
+                        room.eggTokens > 0
+                    ) {
+
+                        // حذف از بزرگ به کوچک
+                        [
+                            hen,
+                            rooster,
+                            nest
+                        ]
+                        .sort((a, b) => b - a)
+                        .forEach(
+                            index =>
+                                player.hand.splice(
+                                    index,
+                                    1
+                                )
+                        );
+
+
+                        player.eggs++;
+
+                        room.eggTokens--;
+
+                        actionDone = true;
+                    }
+
+                    break;
+                }
+
+
+                /* =====================
+                   HATCH
+                ===================== */
+
+                case 'hatch': {
+
+                    const hens =
+                        player.hand.filter(
+                            c => c === 'مرغ'
+                        ).length;
+
+
+                    if (
+                        hens >= 2 &&
+                        player.eggs > 0
+                    ) {
+
+                        let removed = 0;
+
+
+                        for (
+                            let i = 0;
+                            i < player.hand.length &&
+                            removed < 2;
+                            i++
+                        ) {
+
+                            if (
+                                player.hand[i] === 'مرغ'
+                            ) {
+
+                                player.hand.splice(
+                                    i,
+                                    1
+                                );
+
+                                i--;
+
+                                removed++;
+                            }
+                        }
+
+
+                        player.eggs--;
+
+                        player.chicks++;
+
+                        actionDone = true;
+                    }
+
+                    break;
+                }
+
+
+                /* =====================
+                   FOX
+                ===================== */
+
+                case 'fox': {
+
+                    const fox =
+                        player.hand.indexOf(
+                            'روباه'
+                        );
+
+
+                    if (fox === -1)
+                        break;
+
+
+                    const opponent =
+                        room.players.find(
+                            p => p.id !== sid
+                        );
+
+
+                    if (
+                        !opponent ||
+                        opponent.eggs <= 0
+                    ) {
+                        break;
+                    }
+
+
+                    player.hand.splice(
+                        fox,
+                        1
+                    );
+
+
+                    const roosters =
+                        opponent.hand.filter(
+                            c => c === 'خروس'
+                        ).length;
+
+
+                    if (roosters >= 2) {
+
+                        let removed = 0;
+
+
+                        for (
+                            let i = 0;
+                            i < opponent.hand.length &&
+                            removed < 2;
+                            i++
+                        ) {
+
+                            if (
+                                opponent.hand[i] === 'خروس'
+                            ) {
+
+                                opponent.hand.splice(
+                                    i,
+                                    1
+                                );
+
+                                i--;
+
+                                removed++;
+                            }
+                        }
+
+                    } else {
+
+                        opponent.eggs--;
+
+                        player.eggs++;
+                    }
+
+
+                    actionDone = true;
+
+                    break;
+                }
+
+
+                /* =====================
+                   SNAKE
+                ===================== */
+
+                case 'snake': {
+
+                    const snake =
+                        player.hand.indexOf(
+                            'مار'
+                        );
+
+
+                    if (snake === -1)
+                        break;
+
+
+                    const opponent =
+                        room.players.find(
+                            p => p.id !== sid
+                        );
+
+
+                    if (
+                        !opponent ||
+                        opponent.eggs <= 0
+                    ) {
+                        break;
+                    }
+
+
+                    const count =
+                        Math.min(
+                            2,
+                            Math.max(
+                                1,
+                                Number(
+                                    d.data?.count
+                                ) || 1
+                            )
+                        );
+
+
+                    player.hand.splice(
+                        snake,
+                        1
+                    );
+
+
+                    const broken =
+                        Math.min(
+                            opponent.eggs,
+                            count
+                        );
+
+
+                    opponent.eggs -= broken;
+
+                    room.eggTokens += broken;
+
+                    actionDone = true;
+
+                    break;
+                }
+
+
+                /* =====================
+                   TRAP
+                ===================== */
+
+                case 'trap': {
+
+                    const trap =
+                        player.hand.indexOf(
+                            'تله'
+                        );
+
+
+                    if (trap === -1)
+                        break;
+
+
+                    const opponent =
+                        room.players.find(
+                            p => p.id !== sid
+                        );
+
+
+                    if (!opponent)
+                        break;
+
+
+                    const card =
+                        d.data?.card;
+
+
+                    if (
+                        !card ||
+                        !opponent.hand.includes(card)
+                    ) {
+                        break;
+                    }
+
+
+                    player.hand.splice(
+                        trap,
+                        1
+                    );
+
+
+                    const targetIndex =
+                        opponent.hand.indexOf(
+                            card
+                        );
+
+
+                    if (targetIndex !== -1) {
+
+                        opponent.hand.splice(
+                            targetIndex,
+                            1
+                        );
+                    }
+
+
+                    actionDone = true;
+
+                    break;
+                }
+
+
+                /* =====================
+                   DRAW
+                ===================== */
+
+                case 'draw': {
+
+                    if (
+                        room.deck.length > 0
+                    ) {
+
+                        player.hand.push(
+                            room.deck.pop()
+                        );
+
+                        actionDone = true;
+                    }
+
+                    break;
+                }
+
+
+                /* =====================
+                   DISCARD
+                ===================== */
+
+                case 'discard': {
+
+                    const card =
+                        d.data?.card;
+
+
+                    if (!card)
+                        break;
+
+
+                    const index =
+                        player.hand.indexOf(
+                            card
+                        );
+
+
+                    if (index === -1)
+                        break;
+
+
+                    const removed =
+                        player.hand.splice(
+                            index,
+                            1
+                        )[0];
+
+
+                    room.discardPile.push(
+                        removed
+                    );
+
+
+                    actionDone = true;
+
+                    break;
+                }
+
+
+                /* =====================
+                   END TURN
+                ===================== */
+
+                case 'endTurn': {
+
+                    actionDone = true;
+
+                    break;
+                }
+            }
+
+
+            if (!actionDone)
+                return;
+
+
+            /* پر کردن دست تا ۴ کارت */
+
+            while (
+                player.hand.length < 4 &&
+                room.deck.length > 0
+            ) {
+
+                player.hand.push(
+                    room.deck.pop()
+                );
+            }
+
+
+            /* اگر دسته تمام شد */
+            if (
+                room.deck.length === 0 &&
+                room.discardPile.length > 0
+            ) {
+
+                room.deck =
+                    this.shuffle(
+                        [...room.discardPile]
+                    );
+
+                room.discardPile = [];
+            }
+
+
+            /* بررسی برنده */
+
+            for (
+                const p of room.players
+            ) {
+
+                if (p.chicks >= 3) {
+
+                    room.winner = p.id;
+
+                    break;
+                }
+            }
+
+
+            /* تغییر نوبت */
+
+            if (!room.winner) {
+
+                const currentIndex =
+                    room.players.findIndex(
+                        p =>
+                            p.id ===
+                            room.currentTurn
+                    );
+
+
+                const nextIndex =
+                    (
+                        currentIndex + 1
+                    ) %
+                    room.players.length;
+
+
+                room.currentTurn =
+                    room.players[nextIndex].id;
+            }
+
+
+            /* ثبت نتیجه */
+
+            if (room.winner) {
+
+                for (
+                    const p of room.players
+                ) {
+
+                    if (!p.accountId)
+                        continue;
+
+
+                    const profile =
+                        this.recordGameResult(
+                            p.accountId,
+                            p.id === room.winner
+                        );
+
+
+                    if (profile) {
+
+                        this.sendTo(
+                            p.id,
+                            'profileData',
+                            { profile }
+                        );
+                    }
+                }
+            }
+
+
+            await this.save();
+
+
+            this.broadcastRoom(
+                roomId,
+                'gameState',
+                room
+            );
+
+            return;
+        }
+
+
+        /* ================================================
+           CHAT
+        ================================================= */
+
+        if (type === 'chatMessage') {
+
+            const room =
+                this.data.rooms[
+                    String(
+                        d.roomId || ''
+                    ).toUpperCase()
+                ];
+
+
+            if (!room)
+                return;
+
+
+            const player =
+                room.players.find(
+                    p => p.id === sid
+                );
+
+
+            if (!player)
+                return;
+
+
+            this.broadcastRoom(
+                String(d.roomId).toUpperCase(),
+                'chatMessage',
+                {
+
+                    sender:
+                        player.name,
+
+                    message:
+                        String(
+                            d.message || ''
+                        ).slice(0, 2000),
+
+                    time:
+                        new Date()
+                            .toLocaleTimeString()
+                }
+            );
+
+            return;
+        }
+
+
+        /* ================================================
+           CHAT MEDIA
+        ================================================= */
+
+        if (type === 'chatMedia') {
+
+            const room =
+                this.data.rooms[
+                    String(
+                        d.roomId || ''
+                    ).toUpperCase()
+                ];
+
+
+            if (!room ||
+                !d.content)
+                return;
+
+
+            const player =
+                room.players.find(
+                    p => p.id === sid
+                );
+
+
+            const watcher =
+                room.watchers?.includes(
+                    sid
+                );
+
+
+            if (!player && !watcher)
+                return;
+
+
+            const kind =
+                d.kind;
+
+
+            if (
+                !['file', 'gif', 'sticker']
+                    .includes(kind)
+            ) {
+                return;
+            }
+
+
+            const content =
+                String(d.content);
+
+
+            if (
+                content.length >
+                7 * 1024 * 1024
+            ) {
+                return;
+            }
+
+
+            if (kind === 'file') {
+
+                const name =
+                    String(
+                        d.name ||
+                        'file'
+                    );
+
+
+                if (
+                    /\.(exe|bat|cmd|com|scr|msi|ps1|vbs|js)$/i
+                        .test(name)
+                ) {
+                    return;
+                }
+
+
+                if (
+                    Number(d.size || 0) >
+                    5 * 1024 * 1024
+                ) {
+                    return;
+                }
+            }
+
+
+            if (
+                kind === 'gif' &&
+                d.mime &&
+                d.mime !== 'image/gif'
+            ) {
+                return;
+            }
+
+
+            this.broadcastRoom(
+                String(d.roomId).toUpperCase(),
+                'chatMedia',
+                {
+
+                    sender:
+                        player?.name ||
+                        'تماشاگر',
+
+                    kind,
+
+                    content,
+
+                    name: d.name,
+
+                    mime: d.mime,
+
+                    size: d.size,
+
+                    time:
+                        new Date()
+                            .toLocaleTimeString()
+                }
+            );
+
+            return;
+        }
+
+
+        /* ================================================
+           LEAVE
+        ================================================= */
+
+        if (type === 'leaveGame') {
+
+            const roomId =
+                String(
+                    d.roomId || ''
+                ).toUpperCase();
+
+
+            const room =
+                this.data.rooms[roomId];
+
+
+            if (room) {
+
+                room.players =
+                    room.players.filter(
+                        p => p.id !== sid
+                    );
+
+
+                room.watchers =
+                    (room.watchers || [])
+                        .filter(
+                            id => id !== sid
+                        );
+
+
+                if (
+                    room.players.length === 0
+                ) {
+
+                    delete this.data.rooms[
+                        roomId
+                    ];
+
+                } else {
+
+                    room.host =
+                        room.players[0].id;
+
+
+                    room.currentTurn =
+                        room.players[0].id;
+
+
+                    this.broadcastRoom(
+                        roomId,
+                        'gameState',
+                        room
+                    );
+
+
+                    this.broadcastRoom(
+                        roomId,
+                        'roomUpdate',
+                        room
+                    );
+
+
+                    this.broadcastRoom(
+                        roomId,
+                        'webrtc-peer-left',
+                        {
+                            peerId: sid
+                        }
+                    );
+                }
+            }
+
+
+            const online =
+                this.data.onlinePlayers[sid];
+
+
+            if (online) {
+
+                online.status =
+                    'ready';
+
+                online.quickQueue =
+                    false;
+            }
+
+
+            await this.save();
+
+            this.updatePlayerList();
+
+            return;
+        }
+
+
+        /* ================================================
+           WEBRTC
+        ================================================= */
+
+        if (
+            type === 'webrtc-offer' ||
+            type === 'webrtc-answer' ||
+            type === 'webrtc-ice-candidate'
+        ) {
+
+            const to =
+                d.to;
+
+
+            if (
+                !to ||
+                !this.playersShareRoom(
+                    sid,
+                    to
+                )
+            ) {
+                return;
+            }
+
+
+            this.sendTo(
+                to,
+                type,
+                {
+                    from: sid,
+
+                    offer:
+                        d.offer,
+
+                    answer:
+                        d.answer,
+
+                    candidate:
+                        d.candidate
+                }
+            );
+
+            return;
+        }
+
+
+        /* ================================================
+           REMATCH
+        ================================================= */
+
+        if (type === 'rematchRequest') {
+
+            const target =
+                this.data.onlinePlayers[
+                    d.targetId
+                ];
+
+            const requester =
+                this.data.onlinePlayers[sid];
+
+
+            if (!target || !requester)
+                return;
+
+
+            this.sendTo(
+                target.id,
+                'rematchRequest',
+                {
+
+                    fromId: sid,
+
+                    fromName:
+                        requester.name,
+
+                    roomId:
+                        d.roomId ||
+                        null
+                }
+            );
+
+            return;
+        }
+
+
+        if (type === 'acceptRematch') {
+
+            const target =
+                this.data.onlinePlayers[sid];
+
+            const requester =
+                this.data.onlinePlayers[
+                    d.fromId
+                ];
+
+
+            if (!target || !requester)
+                return;
+
+
+            const oldA =
+                this.getRoomForPlayer(
+                    sid
+                );
+
+            const oldB =
+                this.getRoomForPlayer(
+                    d.fromId
+                );
+
+
+            if (
+                oldA &&
+                oldB &&
+                oldA.roomId ===
+                oldB.roomId
+            ) {
+
+                delete this.data.rooms[
+                    oldA.roomId
+                ];
+            }
+
+
+            target.status = 'playing';
+
+            requester.status = 'playing';
+
+
+            const roomId =
+                this.createPrivateGameRoom(
+                    requester,
+                    target
+                );
+
+
+            await this.save();
+
+
+            this.updatePlayerList();
+
+
+            this.sendTo(
+                d.fromId,
+                'rematchAccepted',
+                { roomId }
+            );
+
+
+            this.sendTo(
+                sid,
+                'gameStarted',
+                { roomId }
+            );
+
+            return;
+        }
+
+
+        if (type === 'rejectRematch') {
+
+            const player =
+                this.data.onlinePlayers[sid];
+
+
+            this.sendTo(
+                d.fromId,
+                'rematchRejected',
+                {
+                    byName:
+                        player?.name ||
+                        'حریف'
+                }
+            );
+
+            return;
+        }
+    }
+
+
+    async fetch(request) {
+
+        await this.ready;
+
+
+        if (
+            request.headers.get(
+                'Upgrade'
+            ) !== 'websocket'
+        ) {
+
+            return new Response(
+                'WebSocket endpoint',
+                {
+                    status: 426
+                }
+            );
+        }
+
+
+        const pair =
+            new WebSocketPair();
+
+
+        const client =
+            pair[0];
+
+        const server =
+            pair[1];
+
+
+        server.accept();
+
+
+        const sid =
+            crypto.randomUUID();
+
+
+        this.sessions.set(
+            sid,
+            server
+        );
+
+
+        server.addEventListener(
+            'message',
+            event =>
+                this.onMessage(
+                    sid,
+                    event.data
+                )
+        );
+
+
+        server.addEventListener(
+            'close',
+            () =>
+                this.onClose(sid)
+        );
+
+
+        server.addEventListener(
+            'error',
+            () =>
+                this.onClose(sid)
+        );
+
+
+        return new Response(
+            null,
+            {
+                status: 101,
+                webSocket: client
+            }
+        );
+    }
+
+
+    async onClose(sid) {
+
+        await this.ready;
+
+
+        delete this.data.onlinePlayers[
+            sid
+        ];
+
+
+        delete this.data.pendingRequests[
+            sid
+        ];
+
+
+        for (
+            const requests
+            of Object.values(
+                this.data.pendingRequests
+            )
+        ) {
+
+            for (
+                const request
+                of requests
+            ) {
+
+                if (
+                    request.fromId === sid
+                ) {
+                    request.cancelled = true;
+                }
+            }
+        }
+
+
+        for (
+            const [roomId, room]
+            of Object.entries(
+                this.data.rooms
+            )
+        ) {
+
+            const wasPlayer =
+                room.players?.some(
+                    p => p.id === sid
+                );
+
+
+            if (wasPlayer) {
+
+                room.players =
+                    room.players.filter(
+                        p => p.id !== sid
+                    );
+            }
+
+
+            room.watchers =
+                (room.watchers || [])
+                    .filter(
+                        id => id !== sid
+                    );
+
+
+            if (
+                room.players.length === 0
+            ) {
+
+                delete this.data.rooms[
+                    roomId
+                ];
+
+            } else if (wasPlayer) {
+
+                room.host =
+                    room.players[0].id;
+
+
+                room.currentTurn =
+                    room.players[0].id;
+
+
+                this.broadcastRoom(
+                    roomId,
+                    'gameState',
+                    room
+                );
+
+
+                this.broadcastRoom(
+                    roomId,
+                    'webrtc-peer-left',
+                    {
+                        peerId: sid
+                    }
+                );
+            }
+        }
+
+
+        this.sessions.delete(sid);
+
+
+        await this.save();
+
+
+        this.updatePlayerList();
+    }
 }
 
 
-/* ============================= */
-/* WORKER */
-/* ============================= */
+/* =========================================================
+   WORKER
+========================================================= */
 
 export default {
 
-  async fetch(request, env) {
+    async fetch(request, env) {
 
-    const url = new URL(request.url);
+        const url =
+            new URL(request.url);
 
-    /* تست */
 
-    if (url.pathname === '/healthz') {
-      return new Response('ok');
-    }
+        /* سلامت */
 
-    /* Socket.IO جایگزین */
+        if (
+            url.pathname ===
+            '/healthz'
+        ) {
 
-    if (
-      url.pathname ===
-      '/socket.io/socket.io.js'
-    ) {
-
-      return new Response(
-        SOCKET_SHIM,
-        {
-          headers: {
-            'content-type':
-              'application/javascript; charset=utf-8',
-            'cache-control':
-              'no-store'
-          }
+            return new Response(
+                'ok',
+                {
+                    headers: {
+                        'content-type':
+                            'text/plain; charset=utf-8'
+                    }
+                }
+            );
         }
-      );
-    }
 
-    /* WebSocket */
 
-    if (url.pathname === '/ws') {
+        /* Socket.IO shim */
 
-      return env.GAME_ROOM
-        .get(
-          env.GAME_ROOM.idFromName(
-            'morgdoni-lobby'
-          )
-        )
-        .fetch(request);
-    }
+        if (
+            url.pathname ===
+            '/socket.io/socket.io.js'
+        ) {
 
-    /*
-      مهم:
-      تمام فایل‌های پروژه اصلی
-      از GitHub خوانده می‌شوند.
-    */
+            return new Response(
+                SOCKET_SHIM,
+                {
+                    headers: {
+                        'content-type':
+                            'application/javascript; charset=utf-8',
 
-    let path =
-      url.pathname === '/'
-        ? 'index.html'
-        : url.pathname.slice(1);
-
-    /*
-      جلوگیری از مسیرهای خطرناک
-    */
-
-    path = path
-      .replace(/^\/+/, '')
-      .replace(/\.\./g, '');
-
-    const target =
-      ORIGIN +
-      path;
-
-    const response =
-      await fetch(target);
-
-    /*
-      اگر فایل پیدا نشد
-    */
-
-    if (!response.ok) {
-
-      if (url.pathname !== '/') {
-
-        return new Response(
-          'File not found: ' + path,
-          {
-            status: 404,
-            headers: {
-              'content-type':
-                'text/plain; charset=utf-8'
-            }
-          }
-        );
-      }
-
-      return new Response(
-        'index.html not found',
-        { status: 404 }
-      );
-    }
-
-    /*
-      index.html:
-      فقط Socket.IO قدیمی را
-      به نسخه Worker وصل می‌کنیم.
-    */
-
-    if (
-      path.toLowerCase() ===
-      'index.html'
-    ) {
-
-      let html =
-        await response.text();
-
-      html =
-        html.replace(
-          /<script[^>]+src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/gi,
-          '<script src="/socket.io/socket.io.js"></script>'
-        );
-
-      return new Response(
-        html,
-        {
-          headers: {
-            'content-type':
-              'text/html; charset=utf-8',
-            'cache-control':
-              'no-store'
-          }
+                        'cache-control':
+                            'no-store'
+                    }
+                }
+            );
         }
-      );
+
+
+        /* WebSocket */
+
+        if (
+            url.pathname === '/ws'
+        ) {
+
+            const id =
+                env.GAME_ROOM.idFromName(
+                    'morgdoni-global'
+                );
+
+
+            const room =
+                env.GAME_ROOM.get(id);
+
+
+            return room.fetch(
+                request
+            );
+        }
+
+
+        /*
+           فایل‌های پروژه از Assets
+        */
+
+        let assetPath =
+            url.pathname;
+
+
+        if (
+            assetPath === '/'
+        ) {
+
+            assetPath =
+                '/index.html';
+        }
+
+
+        const assetRequest =
+            new Request(
+                new URL(
+                    assetPath,
+                    request.url
+                ),
+                request
+            );
+
+
+        return env.ASSETS.fetch(
+            assetRequest
+        );
     }
-
-    /*
-      بقیه فایل‌ها بدون تغییر
-      از پروژه اصلی سرو می‌شوند:
-      CSS
-      JS
-      تصاویر
-      صداها
-      فونت‌ها
-      و ...
-    */
-
-    return new Response(
-      response.body,
-      {
-        status: response.status,
-        headers: response.headers
-      }
-    );
-  }
 };
