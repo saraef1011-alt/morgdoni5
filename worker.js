@@ -40,4 +40,25 @@ export class GameRoom {
   async onClose(sid){await this.ready;for(const [rid,r] of Object.entries(this.data.rooms)){const i=r.players.findIndex(p=>p.socketId===sid);if(i>=0){r.players.splice(i,1);if(!r.players.length)delete this.data.rooms[rid];else{r.host=r.players[0].socketId;r.currentTurn=r.players[0].socketId;this.broadcastRoom(r,'roomUpdate',r)}}}delete this.data.online[sid];this.sessions.delete(sid);await this.save();this.broadcast('playerListUpdate',this.publicPlayers())}
 }
 
-export default {async fetch(request,env){const u=new URL(request.url);if(u.pathname==='/healthz')return new Response('ok');if(u.pathname==='/socket.io/socket.io.js')return new Response(SOCKET_SHIM,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}});if(u.pathname==='/ws'){return env.GAME_ROOM.get(env.GAME_ROOM.idFromName('morgdoni-lobby')).fetch(request)}if(u.pathname==='/'){const r=await fetch(ORIGIN+'index.html');let html=await r.text();html=html.replace(/<script[^>]+src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/i,'<script src="/socket.io/socket.io.js"></script>');return new Response(html,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}if(u.pathname==='/morgdoni-fix.js'||u.pathname==='/cloudflare-socket.js'){return fetch(ORIGIN+u.pathname.slice(1))}return fetch(ORIGIN+u.pathname.slice(1))}};
+export default {async fetch(request,env){const u=new URL(request.url);if(u.pathname==='/healthz')return new Response('ok');if(u.pathname==='/socket.io/socket.io.js')return new Response(SOCKET_SHIM,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}});if(u.pathname==='/ws'){return env.GAME_ROOM.get(env.GAME_ROOM.idFromName('morgdoni-lobby')).fetch(request)}
+  // صفحه اصلی: مستقیماً از Assets خود morgdoni5 سرو شود، نه نسخه تستی قبلی
+  if(u.pathname==='/'||u.pathname==='/index.html'){
+    const assetUrl=new URL('/index.html',request.url);
+    const assetRequest=new Request(assetUrl.toString(),request);
+    const response=await env.ASSETS.fetch(assetRequest);
+    if(response.status!==404){
+      const html=await response.text();
+      const fixed=html.replace(/<script[^>]+src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/i,'<script src="/socket.io/socket.io.js"></script>');
+      return new Response(fixed,{status:response.status,headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
+    }
+    // اگر index.html در Assets نبود، موقتاً نسخه اصلی GitHub را برگردان
+    const r=await fetch(ORIGIN+'index.html?rev=main');
+    let html=await r.text();
+    html=html.replace(/<script[^>]+src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/i,'<script src="/socket.io/socket.io.js"></script>');
+    return new Response(html,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
+  }
+  // فایل‌های استاتیک پروژه؛ ابتدا Assets خود morgdoni5، سپس GitHub به عنوان fallback
+  const assetResponse=await env.ASSETS.fetch(request);
+  if(assetResponse.status!==404)return assetResponse;
+  return fetch(ORIGIN+u.pathname.slice(1));
+}};
