@@ -1,4 +1,4 @@
-const ORIGIN = 'https://raw.githubusercontent.com/saraef1011-alt/morgdoni/main/';
+const ORIGIN = 'https://raw.githubusercontent.com/saraef1011-alt/index/main/';
 
 const SOCKET_SHIM = `class MorgdoniSocket{constructor(){this.events={};this.id=crypto.randomUUID();const p=location.protocol==='https:'?'wss:':'ws:';this.ws=new WebSocket(p+'//'+location.host+'/ws?room=lobby');this.ws.onopen=()=>this.emitLocal('connect');this.ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch{return}if(m&&m.type)this.emitLocal(m.type,m.data,m)};this.ws.onclose=()=>this.emitLocal('disconnect');this.ws.onerror=e=>this.emitLocal('connect_error',e)}on(e,c){(this.events[e]??=[]).push(c);return this}emit(e,d){const send=()=>this.ws.readyState===1&&this.ws.send(JSON.stringify({type:e,data:d??null}));if(this.ws.readyState===1)send();else this.ws.addEventListener('open',send,{once:true})}emitLocal(e,d,f){for(const c of this.events[e]||[])try{c(d!==undefined?d:f)}catch(x){console.error(x)}}disconnect(){this.ws?.close()}}window.io=()=>new MorgdoniSocket();`;
 
