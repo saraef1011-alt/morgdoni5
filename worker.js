@@ -13,7 +13,7 @@ export class GameRoom {
   deck(){const a=[];for(const [t,n] of [['مرغ',21],['خروس',21],['لانه',12],['روباه',7],['تله',3],['مار',2]])for(let i=0;i<n;i++)a.push(t);for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
   profile(id,name='بازیکن',avatar='🐔'){return this.data.profiles[id]??(this.data.profiles[id]={accountId:id,username:name,avatar,gamesPlayed:0,wins:0,losses:0})}
   newRoom(players){const id=Math.random().toString(36).slice(2,8).toUpperCase();const r={host:players[0].socketId,players:players.map(p=>({...p,hand:[],eggs:0,chicks:0})),gameStarted:true,deck:this.deck(),eggTokens:18,currentTurn:null,winner:null,discardPile:[]};for(const p of r.players)for(let i=0;i<4;i++)r.deck.length&&r.players.find(x=>x.socketId===p.socketId).hand.push(r.deck.pop());r.currentTurn=r.players[0].socketId;this.data.rooms[id]=r;for(const p of r.players)this.send(this.sessions.get(p.socketId),'gameStarted',{roomId:id});this.broadcastRoom(r,'gameState',r);return id}
-  finish(r){const w=r.players.find(p=>p.chicks>=3);if(!w||r.winner)return;if(r.winner=w.socketId, this.data.profiles[w.accountId])this.data.profiles[w.accountId].wins++;for(const p of r.players){const q=this.data.profiles[p.accountId];if(q){q.gamesPlayed++;if(p.socketId!==w.socketId)q.losses++}}}
+  finish(r){const w=r.players.find(p=>p.chicks>=3);if(!w||r.winner)return;if(r.winner=w.socketId,this.data.profiles[w.accountId])this.data.profiles[w.accountId].wins++;for(const p of r.players){const q=this.data.profiles[p.accountId];if(q){q.gamesPlayed++;if(p.socketId!==w.socketId)q.losses++}}}
   async fetch(request){await this.ready;if(request.headers.get('Upgrade')!=='websocket')return new Response('WebSocket endpoint',{status:426});const pair=new WebSocketPair(),client=pair[0],ws=pair[1];ws.accept();const sid=crypto.randomUUID();this.sessions.set(sid,ws);ws.addEventListener('message',e=>this.onMessage(sid,e.data));ws.addEventListener('close',()=>this.onClose(sid));return new Response(null,{status:101,webSocket:client})}
   async onMessage(sid,raw){await this.ready;let m;try{m=JSON.parse(raw)}catch{return this.send(this.sessions.get(sid),'error','درخواست نامعتبر')};const d=m.data||{};const ws=this.sessions.get(sid);
     if(m.type==='loadProfile'){this.send(ws,'profileData',{profile:this.data.profiles[d.accountId]||null});return}
@@ -40,25 +40,21 @@ export class GameRoom {
   async onClose(sid){await this.ready;for(const [rid,r] of Object.entries(this.data.rooms)){const i=r.players.findIndex(p=>p.socketId===sid);if(i>=0){r.players.splice(i,1);if(!r.players.length)delete this.data.rooms[rid];else{r.host=r.players[0].socketId;r.currentTurn=r.players[0].socketId;this.broadcastRoom(r,'roomUpdate',r)}}}delete this.data.online[sid];this.sessions.delete(sid);await this.save();this.broadcast('playerListUpdate',this.publicPlayers())}
 }
 
-export default {async fetch(request,env){const u=new URL(request.url);if(u.pathname==='/healthz')return new Response('ok');if(u.pathname==='/socket.io/socket.io.js')return new Response(SOCKET_SHIM,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}});if(u.pathname==='/ws'){return env.GAME_ROOM.get(env.GAME_ROOM.idFromName('morgdoni-lobby')).fetch(request)}
-  // صفحه اصلی: مستقیماً از Assets خود morgdoni5 سرو شود، نه نسخه تستی قبلی
+export default {async fetch(request,env){const u=new URL(request.url);if(u.pathname==='/healthz')return new Response('ok');if(u.pathname==='/socket.io/socket.io.js')return new Response(SOCKET_SHIM,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store'}});if(u.pathname==='/ws')return env.GAME_ROOM.get(env.GAME_ROOM.idFromName('morgdoni-lobby')).fetch(request);
+  // مهم: صفحه اصلی همیشه از مخزن اصلی بازی saraef1011-alt/index خوانده می‌شود.
+  // بنابراین index.html تستی موجود در Assets morgdoni5 دیگر نمایش داده نمی‌شود.
   if(u.pathname==='/'||u.pathname==='/index.html'){
-    const assetUrl=new URL('/index.html',request.url);
-    const assetRequest=new Request(assetUrl.toString(),request);
-    const response=await env.ASSETS.fetch(assetRequest);
-    if(response.status!==404){
-      const html=await response.text();
-      const fixed=html.replace(/<script[^>]+src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/i,'<script src="/socket.io/socket.io.js"></script>');
-      return new Response(fixed,{status:response.status,headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
-    }
-    // اگر index.html در Assets نبود، موقتاً نسخه اصلی GitHub را برگردان
-    const r=await fetch(ORIGIN+'index.html?rev=main');
+    const r=await fetch(ORIGIN+'index.html?main=1');
+    if(!r.ok)return new Response('خطا در دریافت فایل اصلی بازی: '+r.status,{status:502});
     let html=await r.text();
     html=html.replace(/<script[^>]+src=["']\/socket\.io\/socket\.io\.js["'][^>]*><\/script>/i,'<script src="/socket.io/socket.io.js"></script>');
     return new Response(html,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}});
   }
-  // فایل‌های استاتیک پروژه؛ ابتدا Assets خود morgdoni5، سپس GitHub به عنوان fallback
-  const assetResponse=await env.ASSETS.fetch(request);
-  if(assetResponse.status!==404)return assetResponse;
-  return fetch(ORIGIN+u.pathname.slice(1));
+  // تمام فایل‌های جانبی نیز از مخزن اصلی بازی خوانده می‌شوند؛ Assets تستی دور زده می‌شود.
+  const path=u.pathname.replace(/^\//,'');
+  if(path){
+    const r=await fetch(ORIGIN+path);
+    if(r.ok)return r;
+  }
+  return new Response('Not Found',{status:404});
 }};
