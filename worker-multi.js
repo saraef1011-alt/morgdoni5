@@ -52,6 +52,7 @@ export default {
       let html = await response.text();
       if (!/morgdoni-card-fix\.js/i.test(html)) html = html.replace(/<\/body>/i, '<script src="/morgdoni-card-fix.js?v=final"></script></body>');
       if (!/socket\.io\/socket\.io\.js/i.test(html)) html = html.replace(/<\/head>/i, '<script src="/socket.io/socket.io.js"></script></head>');
+      if (!/request-ui\.js/i.test(html)) html = html.replace(/<\/body>/i, '<script src="/request-ui.js?v=1"></script></body>');
       return new Response(html, { status: response.status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
     }
     return response;
