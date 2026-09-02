@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>مرغ‌دونی | VS</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:Tahoma,Arial,sans-serif;overflow:hidden;background:radial-gradient(circle at 50% 35%,#5b351d 0,#26160d 48%,#100905 100%);color:#fff}.screen{min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative}.wood{position:absolute;inset:0;opacity:.22;background:repeating-linear-gradient(8deg,transparent 0 22px,#d58b42 23px 25px,transparent 26px 49px)}.vs{position:relative;width:min(1100px,94vw);text-align:center}.title{font-size:clamp(28px,5vw,62px);font-weight:1000;text-shadow:0 5px 0 #4b210d,0 10px 25px #000;margin-bottom:25px}.players{display:flex;align-items:center;justify-content:center;gap:clamp(18px,7vw,90px)}.player{width:min(320px,38vw);padding:22px 16px;border:4px solid #e5a43c;border-radius:28px;background:linear-gradient(145deg,#fff3d2,#c87929);color:#3a1908;box-shadow:0 18px 45px #0009, inset 0 2px #fff8}.avatar{width:120px;height:120px;margin:auto;border-radius:50%;display:grid;place-items:center;font-size:68px;background:#f9d27a;border:6px solid #fff0ba;box-shadow:0 8px 18px #5b260c66}.name{font-size:clamp(18px,3vw,28px);font-weight:900;margin-top:12px}.badge{display:inline-block;margin-top:8px;padding:5px 13px;border-radius:20px;background:#6e3214;color:#ffe8b0;font-weight:bold}.vsmark{font-size:clamp(55px,10vw,120px);font-weight:1000;font-style:italic;color:#ffd23d;text-shadow:0 7px 0 #8c2b12,0 12px 28px #000;transform:rotate(-6deg);animation:pulse 1.2s infinite alternate}.sub{margin-top:30px;font-size:18px;color:#ffe4b0}.start{margin-top:22px;border:0;border-radius:18px;padding:13px 35px;font-size:19px;font-weight:900;cursor:pointer;background:#27ae60;color:#fff;box-shadow:0 6px 0 #126331}.start:active{transform:translateY(4px);box-shadow:0 2px 0 #126331}.mute{position:fixed;top:18px;left:18px;border:2px solid #f4c66b;border-radius:50%;width:48px;height:48px;background:#432310;color:#fff;font-size:21px;cursor:pointer}@keyframes pulse{to{transform:rotate(-6deg) scale(1.08)}}@media(max-width:650px){.players{gap:8px}.player{padding:13px 8px}.avatar{width:82px;height:82px;font-size:45px}.sub{font-size:14px}}
+</style>
+</head>
+<body>
+<audio id="vsMusic" src="/audio/vs.mp3" preload="auto" loop></audio>
+<div class="screen"><div class="wood"></div><main class="vs">
+<div class="title">⚔️ آماده‌ی نبرد؟</div>
+<div class="players">
+<section class="player"><div class="avatar">🐔</div><div class="name" id="p1">بازیکن ۱</div><div class="badge">بازیکن شما</div></section>
+<div class="vsmark">VS</div>
+<section class="player"><div class="avatar">🐓</div><div class="name" id="p2">بازیکن ۲</div><div class="badge">حریف</div></section>
+</div>
+<div class="sub">نبرد مرغ‌دونی تا چند لحظه‌ی دیگر شروع می‌شود...</div>
+<button class="start" onclick="startGame()">🎮 شروع بازی</button>
+</main><button class="mute" id="mute" onclick="toggleMusic()">🔊</button></div>
+<script>
+const q=new URLSearchParams(location.search);document.getElementById('p1').textContent=q.get('p1')||'بازیکن ۱';document.getElementById('p2').textContent=q.get('p2')||'بازیکن ۲';
+const music=document.getElementById('vsMusic');function playMusic(){music.play().catch(()=>{})}document.addEventListener('click',playMusic,{once:true});
+function toggleMusic(){if(music.paused){music.play();document.getElementById('mute').textContent='🔊'}else{music.pause();document.getElementById('mute').textContent='🔇'}}
+function startGame(){location.href='/index.html'+location.search}
+</script>
+</body></html>
