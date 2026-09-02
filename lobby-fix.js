@@ -1,78 +1,39 @@
 (()=>{
 'use strict';
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let lastPlayers=[];
 function sock(){return window.__MORG_SOCKET__||window.socket||null}
-function myId(){const s=sock();return window.myId||s?.id||null}
-function sendRequest(id,btn){
- const s=sock(); if(!s||!id)return;
- if(String(id)===String(myId()))return;
- s.emit('requestGame',{targetId:String(id)});
- if(btn){btn.disabled=true;btn.textContent='📨 ارسال شد';setTimeout(()=>{if(btn.isConnected){btn.disabled=false;btn.textContent='🎮 درخواست بازی'}},1600)}
-}
-function makeButton(id){
- const b=document.createElement('button');
- b.className='action-btn morg-any-request';
- b.dataset.requestId=String(id);
- b.type='button';
- b.textContent='🎮 درخواست بازی';
- b.style.cssText='margin-top:8px;width:100%;background:#27ae60;color:#fff;box-shadow:0 4px 0 #1a6b3b;display:block!important;visibility:visible!important;opacity:1!important;position:relative;z-index:20;';
- b.onclick=e=>{e.preventDefault();e.stopPropagation();sendRequest(id,b)};
- return b;
-}
-function addButtonToPlayer(el){
- if(!el||el.nodeType!==1)return;
- if(el.classList.contains('morg-any-request')||el.querySelector('.morg-any-request'))return;
- let id=el.getAttribute('data-player-id')||el.getAttribute('data-id');
- const profile=el.querySelector('[data-view-profile]');
- if(!id&&profile)id=profile.getAttribute('data-view-profile');
- if(!id)return;
- if(String(id)===String(myId()))return;
- const b=makeButton(id);
- el.appendChild(b);
-}
-function scanPlayers(){
- document.querySelectorAll('.player').forEach(addButtonToPlayer);
- const area=document.getElementById('lobbyPlayersArea');
- if(area){
-  area.querySelectorAll('[data-view-profile],.player').forEach(x=>addButtonToPlayer(x.closest('.player')||x));
+function me(){const s=sock();return String(window.myId||s?.id||'')}
+function request(id,b){const s=sock();if(!s||!id||String(id)===me())return;s.emit('requestGame',{targetId:String(id)});if(b){b.disabled=true;b.textContent='📨 ارسال شد';setTimeout(()=>{if(b.isConnected){b.disabled=false;b.textContent='🎮 درخواست بازی'}},1600)}}
+function ensure(){
+ const grid=document.getElementById('mrgPlayers');if(!grid)return;
+ const others=lastPlayers.filter(p=>p?.id&&String(p.id)!==me());
+ const rows=[...grid.querySelectorAll('.mlg-player')];
+ rows.forEach((row,i)=>{
+  const p=others[i];if(!p)return;
+  row.dataset.requestTarget=String(p.id);
+  let b=row.querySelector('.morg-force-request');
+  if(!b){
+   b=document.createElement('button');b.className='mlg-btn mlg-play morg-force-request';b.type='button';b.textContent='🎮 درخواست بازی';
+   b.style.cssText='display:block!important;visibility:visible!important;opacity:1!important;min-width:140px;background:#27ae60;color:#fff;z-index:9999;position:relative';
+   b.onclick=e=>{e.preventDefault();e.stopPropagation();request(row.dataset.requestTarget,b)};
+   let actions=row.querySelector('.mlg-actions');
+   if(!actions){actions=document.createElement('div');actions.className='mlg-actions';row.appendChild(actions)}
+   actions.appendChild(b);
+  }
  }
-}
-function drawLobby(list){
- if(!Array.isArray(list))return;
- const me=myId();
- const others=list.filter(p=>p&&p.id&&String(p.id)!==String(me));
- const count=document.getElementById('onlineCount');if(count)count.textContent=list.length;
- const empty=document.getElementById('lobbyEmptyMsg');if(empty)empty.style.display=others.length?'none':'block';
- const area=document.getElementById('lobbyPlayersArea');
- if(area){
-  area.innerHTML=others.map(p=>`<div class="player" data-player-id="${esc(p.id)}" style="position:relative"><div class="player-name"><span>${esc(p.avatar||'🐔')} ${esc(p.name||'بازیکن')}</span></div><div style="font-size:.85rem;color:#7b3f00;margin-bottom:6px">🟢 آنلاین</div></div>`).join('');
-  scanPlayers();
- }
-}
-function hookSocket(){
- const s=sock();
- if(!s||s.__morgRequestFix)return;
- s.__morgRequestFix=true;
- s.on('playerListUpdate',drawLobby);
- s.on('hello',d=>{if(d?.id)window.myId=d.id;scanPlayers()});
- s.on('connect',()=>{if(s.id)window.myId=s.id;scanPlayers()});
- s.on('gameRequestError',d=>{if(d)alert(String(d))});
- s.on('gameRequestSent',d=>{if(d&&typeof window.showBigMessage==='function'&&d.targetName)window.showBigMessage(`📨 درخواست برای ${d.targetName} ارسال شد`,false)});
 }
 function hook(){
  const s=sock();
+ if(s&&!s.__morgForceRequest){
+  s.__morgForceRequest=true;
+  s.on('playerListUpdate',l=>{lastPlayers=Array.isArray(l)?l:[];setTimeout(ensure,0);setTimeout(ensure,100);});
+  s.on('connect',()=>{if(s.id)window.myId=s.id;setTimeout(ensure,100)});
+  s.on('hello',d=>{if(d?.id)window.myId=d.id;setTimeout(ensure,100)});
+ }
  if(s?.id)window.myId=s.id;
- hookSocket();
- scanPlayers();
+ ensure();
 }
-setInterval(hook,300);
-hook();
-const mo=new MutationObserver(()=>scanPlayers());
-mo.observe(document.documentElement,{childList:true,subtree:true});
-document.addEventListener('click',e=>{
- const b=e.target.closest('.morg-any-request,[data-request-id]');
- if(!b)return;
- const id=b.dataset.requestId;
- if(id){e.preventDefault();e.stopPropagation();sendRequest(id,b)}
-},true);
+hook();setInterval(hook,250);
+new MutationObserver(ensure).observe(document.documentElement,{childList:true,subtree:true});
+document.addEventListener('click',e=>{const b=e.target.closest('.morg-force-request');if(b){e.preventDefault();e.stopPropagation();request(b.closest('.mlg-player')?.dataset.requestTarget,b)}},true);
 })();
