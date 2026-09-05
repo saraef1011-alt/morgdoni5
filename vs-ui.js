@@ -6,14 +6,12 @@
   let active = false;
   let hideTimer = null;
 
-  function esc(v) {
-    return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c] || c));
-  }
+  function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c] || c)); }
   function addStyle() {
     if (document.getElementById(STYLE_ID)) return;
     const s = document.createElement("style"); s.id = STYLE_ID;
     s.textContent = `
-      #${ROOT_ID}{position:fixed;inset:0;z-index:2147483000;display:none;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,#6b3b1f 0,#28150c 52%,#0d0704 100%);color:#fff;direction:rtl}
+      #${ROOT_ID}{position:fixed;inset:0;z-index:2147483000;display:none;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,#7b421f 0,#28150c 52%,#0d0704 100%);color:#fff;direction:rtl}
       #${ROOT_ID}.show{display:flex;animation:mvsFadeIn .45s ease-out both}
       #${ROOT_ID} .mvs-wood{position:absolute;inset:0;opacity:.22;background:repeating-linear-gradient(8deg,transparent 0 22px,#d58b42 23px 25px,transparent 26px 49px)}
       #${ROOT_ID} .mvs-wrap{position:relative;width:min(1250px,94vw);max-height:94vh;text-align:center;z-index:1}
@@ -27,6 +25,7 @@
       #${ROOT_ID} .mvs-vs{font-size:clamp(52px,9vw,110px);font-weight:1000;font-style:italic;color:#ffd23d;text-shadow:0 7px 0 #8c2b12,0 12px 28px #000;transform:rotate(-6deg);animation:mvsPulse 1.1s infinite alternate}
       #${ROOT_ID} .mvs-sub{margin-top:24px;font-size:clamp(16px,2vw,22px);color:#ffe4b0;font-weight:800}
       #${ROOT_ID} .mvs-count{display:inline-block;margin-right:8px;color:#ffd23d}
+      #${ROOT_ID} .mvs-timer{display:inline-flex;min-width:42px;height:42px;align-items:center;justify-content:center;margin-right:8px;border-radius:50%;background:#ffd23d;color:#4b210d;font-weight:1000;box-shadow:0 4px 0 #9b5b10}
       #${ROOT_ID} .mvs-skip{margin-top:18px;border:0;border-radius:17px;padding:11px 24px;font-size:16px;font-weight:900;cursor:pointer;background:#27ae60;color:#fff;box-shadow:0 5px 0 #126331}
       #${ROOT_ID} .mvs-music{position:fixed;top:18px;left:18px;border:2px solid #f4c66b;border-radius:50%;width:50px;height:50px;background:#432310;color:#fff;font-size:21px;cursor:pointer;z-index:3}
       @keyframes mvsFadeIn{from{opacity:0}to{opacity:1}} @keyframes mvsDrop{from{opacity:0;transform:translateY(-35px) scale(.8)}to{opacity:1;transform:none}} @keyframes mvsPlayer{from{opacity:0;transform:translateY(40px) scale(.7)}to{opacity:1;transform:none}} @keyframes mvsPulse{to{transform:rotate(-6deg) scale(1.08)}}
@@ -36,7 +35,7 @@
   function getRoot(){
     addStyle(); let root=document.getElementById(ROOT_ID); if(root)return root;
     root=document.createElement("div");root.id=ROOT_ID;
-    root.innerHTML=`<div class="mvs-wood"></div><div class="mvs-wrap"><div class="mvs-title">⚔️ آماده‌ی نبرد؟</div><div class="mvs-players" id="mvsPlayers"></div><div class="mvs-sub">نبرد مرغ‌دونی تا چند لحظه‌ی دیگر شروع می‌شود... <span class="mvs-count" id="mvsCount"></span></div><button class="mvs-skip" id="mvsSkip">🎮 ورود به بازی</button></div><button class="mvs-music" id="mvsMusicBtn">🔊</button>`;
+    root.innerHTML=`<div class="mvs-wood"></div><div class="mvs-wrap"><div class="mvs-title">⚔️ آماده‌ی نبرد؟</div><div class="mvs-players" id="mvsPlayers"></div><div class="mvs-sub">نبرد مرغ‌دونی شروع شد! <span class="mvs-count" id="mvsCount"></span><span class="mvs-timer" id="mvsTimer">5</span></div><button class="mvs-skip" id="mvsSkip">🎮 ورود به بازی</button></div><button class="mvs-music" id="mvsMusicBtn">🔊</button>`;
     document.body.appendChild(root);
     const music=document.createElement("audio");music.id=MUSIC_ID;music.src="/audio/vs.mp3";music.preload="auto";music.loop=true;root.appendChild(music);
     root.querySelector("#mvsMusicBtn").onclick=()=>{if(music.paused){music.play().catch(()=>{});root.querySelector("#mvsMusicBtn").textContent="🔊"}else{music.pause();root.querySelector("#mvsMusicBtn").textContent="🔇"}};
@@ -44,9 +43,15 @@
   }
   function normalizePlayers(state){const ps=state?.players||state?.room?.players||[];return Array.isArray(ps)?ps.filter(Boolean):[]}
   function show(state){
-    const players=normalizePlayers(state);if(players.length<2)return;const root=getRoot(),list=root.querySelector("#mvsPlayers");list.innerHTML="";
-    players.forEach((p,i)=>{const card=document.createElement("section");card.className="mvs-player";card.innerHTML=`<div class="mvs-avatar">${esc(p.avatar||"🐔")}</div><div class="mvs-name">${esc(p.name||"بازیکن")}</div><div class="mvs-badge">${i===0?"بازیکن اول":"بازیکن"}</div>`;list.appendChild(card);if(i<players.length-1&&players.length<=2){const vs=document.createElement("div");vs.className="mvs-vs";vs.textContent="VS";list.appendChild(vs)}});
-    root.querySelector("#mvsCount").textContent=`(${players.length} نفره)`;root.classList.add("show");active=true;const music=root.querySelector("#"+MUSIC_ID);music.play().catch(()=>{});clearTimeout(hideTimer);hideTimer=setTimeout(hide,3600);
+    const players=normalizePlayers(state); if(players.length<2)return;
+    const root=getRoot(),list=root.querySelector("#mvsPlayers"); list.innerHTML="";
+    players.forEach((p,i)=>{const card=document.createElement("section");card.className="mvs-player";card.innerHTML=`<div class="mvs-avatar">${esc(p.avatar||"🐔")}</div><div class="mvs-name">${esc(p.name||"بازیکن")}</div><div class="mvs-badge">${i===0?"بازیکن اول":"بازیکن"}</div>`;list.appendChild(card);if(i<players.length-1&&players.length===2){const vs=document.createElement("div");vs.className="mvs-vs";vs.textContent="VS";list.appendChild(vs)}});
+    root.querySelector("#mvsCount").textContent=`(${players.length} نفره)`;
+    root.classList.add("show");active=true;
+    const music=root.querySelector("#"+MUSIC_ID);music.play().catch(()=>{});
+    clearTimeout(hideTimer);let left=5;const timer=root.querySelector("#mvsTimer");if(timer)timer.textContent=left;
+    const tick=setInterval(()=>{if(!active){clearInterval(tick);return}left--;if(timer)timer.textContent=Math.max(0,left);if(left<=0)clearInterval(tick)},1000);
+    hideTimer=setTimeout(hide,5200);
   }
   function hide(){clearTimeout(hideTimer);const root=document.getElementById(ROOT_ID);if(!root)return;root.classList.remove("show");active=false}
   function socket(){return window.__MORG_SOCKET__||window.socket||null}
