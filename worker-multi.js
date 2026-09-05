@@ -9,6 +9,46 @@ export class GameRoom extends BaseGameRoom {
     const t = m?.type, d = m?.data || {};
     await this.ready;
 
+    if (t === 'quickGame') {
+      const p = this.data.online[id];
+      const requested = Math.max(2, Math.min(MAX_PLAYERS, Number(d.playerCount) || 2));
+      if (!p) return this.send(id, 'quickGameError', 'بازیکن یافت نشد');
+      if (p.status !== 'ready') return this.send(id, 'quickGameError', 'ابتدا باید آماده باشید');
+      if (!this.data.quickQueues) this.data.quickQueues = {};
+      for (const k of Object.keys(this.data.quickQueues)) {
+        this.data.quickQueues[k] = (this.data.quickQueues[k] || []).filter(x => this.data.online[x]?.status === 'requesting');
+      }
+      const key = String(requested);
+      this.data.quickQueues[key] ??= [];
+      if (!this.data.quickQueues[key].includes(id)) this.data.quickQueues[key].push(id);
+      p.status = 'requesting';
+      const q = this.data.quickQueues[key].filter(x => this.data.online[x]?.status === 'requesting');
+      this.data.quickQueues[key] = q;
+      this.send(id, 'quickGameQueued', { playerCount: requested, queued: q.length });
+      if (q.length >= requested) {
+        const ids = q.splice(0, requested);
+        this.data.quickQueues[key] = q;
+        const players = ids.map(x => this.data.online[x]).filter(Boolean);
+        if (players.length === requested) {
+          for (const pl of players) pl.status = 'playing';
+          const rid = this.newRoomMany(players);
+          const room = this.data.rooms[rid];
+          this.roomBroadcast(room, 'gameStarted', { roomId: rid, playerCount: requested });
+          this.roomBroadcast(room, 'gameState', room);
+          for (const pl of players) this.send(pl.id, 'quickGameFound', { roomId: rid, playerCount: requested });
+        }
+      }
+      this.updateList(); await this.save(); return;
+    }
+
+    if (t === 'cancelQuickGame') {
+      for (const k of Object.keys(this.data.quickQueues || {})) {
+        this.data.quickQueues[k] = (this.data.quickQueues[k] || []).filter(x => x !== id);
+      }
+      if (this.data.online[id]?.status === 'requesting') this.data.online[id].status = 'ready';
+      this.send(id, 'quickGameCancelled'); this.updateList(); await this.save(); return;
+    }
+
     if (t === 'joinRoom') {
       const rid = String(d.roomId || '').trim().toUpperCase();
       const r = this.data.rooms[rid];
@@ -60,6 +100,15 @@ export class GameRoom extends BaseGameRoom {
 
     return super.message(id, raw);
   }
+
+  newRoomMany(players) {
+    let rid;
+    do { rid = Math.random().toString(36).slice(2,8).toUpperCase(); } while (this.data.rooms[rid]);
+    const r = { host: players[0].id, players: players.map(p => this.player(p)), watchers: [], gameStarted:false, deck:createDeck(), eggTokens:18, currentTurn:null, winner:null, discardPile:[] };
+    this.data.rooms[rid] = r;
+    this.startGame(rid);
+    return rid;
+  }
 }
 
 const SOCKET_SHIM = `class MorgdoniSocket{constructor(){this.events={};this.id=null;this.queue=[];const p=location.protocol==='https:'?'wss:':'ws:';this.ws=new WebSocket(p+'//'+location.host+'/ws');this.ws.onopen=()=>{this.emitLocal('connect');for(const m of this.queue)this.ws.send(m);this.queue=[]};this.ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m?.type){if(m.type==='hello'&&m.data?.id)this.id=m.data.id;this.emitLocal(m.type,m.data)}}catch(x){console.error(x)}};this.ws.onclose=()=>this.emitLocal('disconnect');this.ws.onerror=e=>this.emitLocal('connect_error',e)}on(e,c){(this.events[e]??=[]).push(c);return this}once(e,c){const f=d=>{this.off(e,f);c(d)};return this.on(e,f)}off(e,c){this.events[e]=(this.events[e]||[]).filter(x=>x!==c);return this}emit(e,d){const m=JSON.stringify({type:e,data:d??null});if(this.ws.readyState===1)this.ws.send(m);else this.queue.push(m);return this}emitLocal(e,d){for(const c of this.events[e]||[])try{c(d)}catch(x){console.error(x)}}disconnect(){this.ws?.close()}}window.io=window.io||function(){const s=new MorgdoniSocket();window.__MORG_SOCKET__=s;return s};`;
@@ -67,4 +116,4 @@ function createDeck(){const a=[];for(const [t,n] of [['مرغ',21],['خروس',2
 
 const FORCE_REQUEST = `<script>(function(){'use strict';function go(){const s=window.__MORG_SOCKET__||window.socket;if(!s)return;const me=String(s.id||window.myId||'');document.querySelectorAll('.mlg-player').forEach((row,i)=>{let b=row.querySelector('[data-force-request]');if(b)return;const list=window.__MORG_LAST_PLAYERS__||[];const others=list.filter(p=>p&&p.id&&String(p.id)!==me);const p=others[i];if(!p)return; b=document.createElement('button');b.type='button';b.setAttribute('data-force-request','1');b.textContent='🎮 درخواست بازی';b.style.cssText='display:block!important;width:100%;margin-top:8px;padding:10px;border:0;border-radius:10px;background:#16a34a;color:white;font-weight:800;font-size:14px;cursor:pointer;position:relative;z-index:99999';b.onclick=function(e){e.preventDefault();e.stopPropagation();s.emit('requestGame',{targetId:String(p.id)});b.textContent='📨 ارسال شد';b.disabled=true;setTimeout(function(){if(b.isConnected){b.disabled=false;b.textContent='🎮 درخواست بازی'}},1800)};(row.querySelector('.mlg-actions')||row).appendChild(b)});document.querySelectorAll('#lobbyPlayersArea .player').forEach(row=>{if(row.querySelector('[data-force-request]'))return;const id=row.dataset.id||row.getAttribute('data-player-id');if(!id||id===me)return;const b=document.createElement('button');b.type='button';b.setAttribute('data-force-request','1');b.textContent='🎮 درخواست بازی';b.style.cssText='display:block!important;margin-top:6px;background:#16a34a;color:#fff;border:0;border-radius:8px;padding:8px 12px;font-weight:800';b.onclick=function(e){e.preventDefault();e.stopPropagation();s.emit('requestGame',{targetId:String(id)});b.textContent='📨 ارسال شد'};row.appendChild(b)})}function hook(){const s=window.__MORG_SOCKET__||window.socket;if(s&&!s.__forceReq){s.__forceReq=1;s.on('playerListUpdate',function(l){window.__MORG_LAST_PLAYERS__=Array.isArray(l)?l:[];setTimeout(go,0);setTimeout(go,200)});s.on('connect',go)}go()}setInterval(hook,500);new MutationObserver(go).observe(document.documentElement,{childList:true,subtree:true});hook()})();</script>`;
 
-export default {async fetch(request,env){const u=new URL(request.url);if(u.pathname==='/healthz')return new Response('ok');if(u.pathname==='/socket.io/socket.io.js')return new Response(SOCKET_SHIM,{headers:{'content-type':'application/javascript;charset=utf-8','cache-control':'no-store'}});if(u.pathname==='/ws')return env.GAME_ROOM.get(env.GAME_ROOM.idFromName('morgdoni-lobby')).fetch(request);const response=await env.ASSETS.fetch(request);if(response.status===404)return new Response('Not Found',{status:404});const type=response.headers.get('content-type')||'';if(u.pathname==='/'||u.pathname==='/index.html'||type.includes('text/html')){let html=await response.text();html=html.replace(/<script[^>]+(?:request-ui|lobby-fix|morgdoni-card-fix|online-panel)[^>]*><\/script>/gi,'');if(!/socket\.io\/socket\.io\.js/i.test(html))html=html.replace(/<\/head>/i,'<script src="/socket.io/socket.io.js?v=force3"></script></head>');html=html.replace(/<\/body>/i,'<script src="/morgdoni-card-fix.js?v=force3"></script><script src="/request-ui.js?v=force3"></script><script src="/lobby-fix.js?v=force3"></script><script src="/online-panel.js?v=force3"></script>'+FORCE_REQUEST+'</body>');return new Response(html,{status:response.status,headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return response}};
+export default {async fetch(request,env){const u=new URL(request.url);if(u.pathname==='/healthz')return new Response('ok');if(u.pathname==='/socket.io/socket.io.js')return new Response(SOCKET_SHIM,{headers:{'content-type':'application/javascript;charset=utf-8','cache-control':'no-store'}});if(u.pathname==='/ws')return env.GAME_ROOM.get(env.GAME_ROOM.idFromName('morgdoni-lobby')).fetch(request);const response=await env.ASSETS.fetch(request);if(response.status===404)return new Response('Not Found',{status:404});const type=response.headers.get('content-type')||'';if(u.pathname==='/'||u.pathname==='/index.html'||type.includes('text/html')){let html=await response.text();html=html.replace(/<script[^>]+(?:request-ui|lobby-fix|morgdoni-card-fix|online-panel|quick-game-ui|vs-ui)[^>]*><\/script>/gi,'');if(!/socket\.io\/socket\.io\.js/i.test(html))html=html.replace(/<\/head>/i,'<script src="/socket.io/socket.io.js?v=force4"></script></head>');html=html.replace(/<\/body>/i,'<script src="/morgdoni-card-fix.js?v=force4"></script><script src="/request-ui.js?v=force4"></script><script src="/lobby-fix.js?v=force4"></script><script src="/online-panel.js?v=force4"></script><script src="/quick-game-ui.js?v=force4"></script><script src="/vs-ui.js?v=force4"></script>'+FORCE_REQUEST+'</body>');return new Response(html,{status:response.status,headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store'}})}return response}};
