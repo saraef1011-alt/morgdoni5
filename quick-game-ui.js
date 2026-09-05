@@ -32,15 +32,26 @@
     document.body.appendChild(root);root.querySelectorAll('[data-count]').forEach(b=>b.onclick=()=>start(Number(b.dataset.count)));root.querySelector('#mqCancel').onclick=remove;
   }
   function start(count){
-    selected=count;searching=true;const root=document.getElementById(ROOT_ID);if(!root)return;root.classList.add('searching');
-    root.querySelector('.mq-box').innerHTML=`<div class="mq-lens">🔎</div><div class="mq-search-title">در حال جستجوی حریف<span class="mq-dots">...</span></div><div class="mq-note">منتظر ${count} بازیکن برای شروع بازی ${count} نفره هستیم.</div><button class="mq-cancel" id="mqCancel">❌ لغو جستجو</button>`;
-    root.querySelector('#mqCancel').onclick=cancel;const s=socket();if(s)s.emit('quickGame',{playerCount:count});
+    selected=count;searching=true;const root=document.getElementById(ROOT_ID);if(!root)return;
+    root.querySelector('.mq-box').innerHTML=`<div class="mq-lens">⚡</div><div class="mq-search-title">آماده‌سازی بازی ${count} نفره...</div><div class="mq-note">در حال آماده کردن مسابقه</div>`;
+    root.classList.add('searching');
+    setTimeout(()=>{
+      if(!searching||!document.getElementById(ROOT_ID))return;
+      root.querySelector('.mq-box').innerHTML=`<div class="mq-lens">🔎</div><div class="mq-search-title">در حال جستجوی حریف<span class="mq-dots">...</span></div><div class="mq-note">منتظر ${count} بازیکن برای شروع بازی ${count} نفره هستیم.</div><button class="mq-cancel" id="mqCancel">❌ لغو جستجو</button>`;
+      root.querySelector('#mqCancel').onclick=cancel;const s=socket();if(s)s.emit('quickGame',{playerCount:count});
+    },700);
   }
   function cancel(){const s=socket();if(s)s.emit('cancelQuickGame');remove()}
-  function bind(){
+  function bindSocket(){
+    const s=socket();if(!s||s.__morgQuickEvents)return;if(s.__morgQuickEvents=true){
+      s.on('quickGameQueued',d=>{if(searching){const n=d?.playerCount||selected;const note=document.querySelector(`#${ROOT_ID} .mq-note`);if(note)note.textContent=`در حال جستجوی حریف برای بازی ${n} نفره...`}});
+      s.on('quickGameError',d=>{if(searching){alert(d||'خطا در بازی سریع');remove()}});
+      s.on('quickGameCancelled',remove);
+    }
+  }
+  function bindDocument(){
     if(boundDocuments)return;boundDocuments=true;
     document.addEventListener('click',e=>{const el=e.target?.closest?.('button,a,[role="button"]');if(!el)return;const text=(el.textContent||'').replace(/\s+/g,' ').trim();if(!/بازی\s*سریع/.test(text))return;e.preventDefault();e.stopImmediatePropagation();showPicker()},true);
-    const s=socket();if(s&&!s.__morgQuickEvents){s.__morgQuickEvents=true;s.on('quickGameQueued',d=>{if(searching){const n=d?.playerCount||selected;const note=document.querySelector(`#${ROOT_ID} .mq-note`);if(note)note.textContent=`در حال جستجوی حریف برای بازی ${n} نفره...`}});s.on('quickGameError',d=>{if(searching){alert(d||'خطا در بازی سریع');remove()}});s.on('quickGameCancelled',remove)}
   }
-  bind();setInterval(()=>{if(!boundDocuments)bind()},1000);
+  bindDocument();bindSocket();setInterval(bindSocket,500);
 })();
