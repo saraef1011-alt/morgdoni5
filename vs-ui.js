@@ -1,60 +1,34 @@
 (() => {
-  "use strict";
-  const STYLE_ID = "morg-vs-style";
-  const ROOT_ID = "morg-vs-overlay";
-  const MUSIC_ID = "morg-vs-music";
-  let active = false;
-  let hideTimer = null;
-
-  function esc(v) { return String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c] || c)); }
-  function addStyle() {
-    if (document.getElementById(STYLE_ID)) return;
-    const s = document.createElement("style"); s.id = STYLE_ID;
-    s.textContent = `
-      #${ROOT_ID}{position:fixed;inset:0;z-index:2147483000;display:none;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,#7b421f 0,#28150c 52%,#0d0704 100%);color:#fff;direction:rtl}
-      #${ROOT_ID}.show{display:flex;animation:mvsFadeIn .45s ease-out both}
-      #${ROOT_ID} .mvs-wood{position:absolute;inset:0;opacity:.22;background:repeating-linear-gradient(8deg,transparent 0 22px,#d58b42 23px 25px,transparent 26px 49px)}
-      #${ROOT_ID} .mvs-wrap{position:relative;width:min(1250px,94vw);max-height:94vh;text-align:center;z-index:1}
-      #${ROOT_ID} .mvs-title{font-size:clamp(30px,5vw,66px);font-weight:1000;text-shadow:0 6px 0 #4b210d,0 12px 28px #000;margin-bottom:22px;animation:mvsDrop .65s cubic-bezier(.2,.8,.2,1) both}
-      #${ROOT_ID} .mvs-players{display:flex;align-items:center;justify-content:center;gap:clamp(10px,3vw,42px);flex-wrap:wrap}
-      #${ROOT_ID} .mvs-player{width:min(240px,27vw);min-width:150px;padding:16px 12px;border:4px solid #e5a43c;border-radius:28px;background:linear-gradient(145deg,#fff3d2,#c87929);color:#3a1908;box-shadow:0 18px 45px #0009,inset 0 2px #fff8;animation:mvsPlayer .65s cubic-bezier(.2,.8,.2,1) both}
-      #${ROOT_ID} .mvs-player:nth-child(2){animation-delay:.08s}#${ROOT_ID} .mvs-player:nth-child(3){animation-delay:.16s}#${ROOT_ID} .mvs-player:nth-child(4){animation-delay:.24s}#${ROOT_ID} .mvs-player:nth-child(5){animation-delay:.32s}#${ROOT_ID} .mvs-player:nth-child(6){animation-delay:.40s}
-      #${ROOT_ID} .mvs-avatar{width:clamp(95px,11vw,145px);height:clamp(95px,11vw,145px);margin:auto;border-radius:50%;display:grid;place-items:center;font-size:clamp(50px,7vw,78px);background:#f9d27a;border:6px solid #fff0ba;box-shadow:0 8px 18px #5b260c66}
-      #${ROOT_ID} .mvs-name{font-size:clamp(18px,2.4vw,29px);font-weight:1000;margin-top:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      #${ROOT_ID} .mvs-badge{display:inline-block;margin-top:7px;padding:5px 12px;border-radius:20px;background:#6e3214;color:#ffe8b0;font-weight:900;font-size:13px}
-      #${ROOT_ID} .mvs-vs{font-size:clamp(52px,9vw,110px);font-weight:1000;font-style:italic;color:#ffd23d;text-shadow:0 7px 0 #8c2b12,0 12px 28px #000;transform:rotate(-6deg);animation:mvsPulse 1.1s infinite alternate}
-      #${ROOT_ID} .mvs-sub{margin-top:24px;font-size:clamp(16px,2vw,22px);color:#ffe4b0;font-weight:800}
-      #${ROOT_ID} .mvs-count{display:inline-block;margin-right:8px;color:#ffd23d}
-      #${ROOT_ID} .mvs-timer{display:inline-flex;min-width:42px;height:42px;align-items:center;justify-content:center;margin-right:8px;border-radius:50%;background:#ffd23d;color:#4b210d;font-weight:1000;box-shadow:0 4px 0 #9b5b10}
-      #${ROOT_ID} .mvs-skip{margin-top:18px;border:0;border-radius:17px;padding:11px 24px;font-size:16px;font-weight:900;cursor:pointer;background:#27ae60;color:#fff;box-shadow:0 5px 0 #126331}
-      #${ROOT_ID} .mvs-music{position:fixed;top:18px;left:18px;border:2px solid #f4c66b;border-radius:50%;width:50px;height:50px;background:#432310;color:#fff;font-size:21px;cursor:pointer;z-index:3}
-      @keyframes mvsFadeIn{from{opacity:0}to{opacity:1}} @keyframes mvsDrop{from{opacity:0;transform:translateY(-35px) scale(.8)}to{opacity:1;transform:none}} @keyframes mvsPlayer{from{opacity:0;transform:translateY(40px) scale(.7)}to{opacity:1;transform:none}} @keyframes mvsPulse{to{transform:rotate(-6deg) scale(1.08)}}
-      @media(max-width:700px){#${ROOT_ID} .mvs-player{width:42vw;min-width:135px;padding:10px 7px}#${ROOT_ID} .mvs-players{gap:8px;max-height:70vh;overflow:auto;padding:5px}.mvs-sub{margin-top:12px}}
-    `; document.head.appendChild(s);
+  'use strict';
+  const ROOT='morg-vs-overlay', STYLE='morg-vs-css', AUDIO='morg-vs-audio';
+  let active=false, timer=null, socketRef=null, lastRoom=null;
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c));
+  function sock(){
+    const s=window.__MORG_SOCKET__||window.socket||socketRef;
+    if(s){socketRef=s;return s}
+    if(typeof window.io==='function'){try{socketRef=window.io();window.__MORG_SOCKET__=socketRef;return socketRef}catch(e){}}
+    return null;
   }
-  function getRoot(){
-    addStyle(); let root=document.getElementById(ROOT_ID); if(root)return root;
-    root=document.createElement("div");root.id=ROOT_ID;
-    root.innerHTML=`<div class="mvs-wood"></div><div class="mvs-wrap"><div class="mvs-title">⚔️ آماده‌ی نبرد؟</div><div class="mvs-players" id="mvsPlayers"></div><div class="mvs-sub">نبرد مرغ‌دونی شروع شد! <span class="mvs-count" id="mvsCount"></span><span class="mvs-timer" id="mvsTimer">5</span></div><button class="mvs-skip" id="mvsSkip">🎮 ورود به بازی</button></div><button class="mvs-music" id="mvsMusicBtn">🔊</button>`;
-    document.body.appendChild(root);
-    const music=document.createElement("audio");music.id=MUSIC_ID;music.src="/audio/vs.mp3";music.preload="auto";music.loop=true;root.appendChild(music);
-    root.querySelector("#mvsMusicBtn").onclick=()=>{if(music.paused){music.play().catch(()=>{});root.querySelector("#mvsMusicBtn").textContent="🔊"}else{music.pause();root.querySelector("#mvsMusicBtn").textContent="🔇"}};
-    root.querySelector("#mvsSkip").onclick=hide; return root;
+  function style(){if(document.getElementById(STYLE))return;const s=document.createElement('style');s.id=STYLE;s.textContent=`
+    #${ROOT}{position:fixed;inset:0;z-index:2147483646;display:none;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,#7b421f,#28150c 55%,#0d0704);color:#fff;direction:rtl;font-family:Tahoma,Arial,sans-serif}#${ROOT}.on{display:flex;animation:vsin .35s ease-out}
+    #${ROOT} .wood{position:absolute;inset:0;opacity:.2;background:repeating-linear-gradient(8deg,transparent 0 22px,#d58b42 23px 25px,transparent 26px 49px)}#${ROOT} .wrap{position:relative;width:min(1350px,95vw);max-height:94vh;text-align:center;z-index:1}
+    #${ROOT} .title{font-size:clamp(30px,5vw,66px);font-weight:1000;text-shadow:0 6px 0 #4b210d,0 12px 28px #000;margin-bottom:20px}#${ROOT} .players{display:flex;align-items:center;justify-content:center;gap:clamp(8px,2vw,30px);flex-wrap:wrap;max-height:67vh;overflow:auto;padding:8px}
+    #${ROOT} .player{width:min(220px,25vw);min-width:140px;padding:14px 10px;border:4px solid #e5a43c;border-radius:25px;background:linear-gradient(145deg,#fff3d2,#c87929);color:#3a1908;box-shadow:0 18px 45px #0009;animation:vspop .55s ease both}#${ROOT} .avatar{width:clamp(90px,10vw,135px);height:clamp(90px,10vw,135px);margin:auto;border-radius:50%;display:grid;place-items:center;font-size:clamp(48px,6vw,72px);background:#f9d27a;border:6px solid #fff0ba}
+    #${ROOT} .name{font-size:clamp(17px,2.2vw,28px);font-weight:1000;margin-top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#${ROOT} .badge{display:inline-block;margin-top:6px;padding:5px 11px;border-radius:20px;background:#6e3214;color:#ffe8b0;font-weight:900;font-size:12px}#${ROOT} .vs{font-size:clamp(55px,9vw,115px);font-weight:1000;font-style:italic;color:#ffd23d;text-shadow:0 7px 0 #8c2b12,0 12px 28px #000;animation:vspulse 1s infinite alternate}
+    #${ROOT} .sub{margin-top:18px;font-size:clamp(16px,2vw,22px);color:#ffe4b0;font-weight:900}#${ROOT} .count{display:inline-flex;margin-right:8px;min-width:46px;height:46px;border-radius:50%;align-items:center;justify-content:center;background:#ffd23d;color:#4b210d;font-size:22px;font-weight:1000;box-shadow:0 5px 0 #9b5b10}#${ROOT} .skip{margin-top:16px;border:0;border-radius:16px;padding:11px 25px;background:#27ae60;color:#fff;font-weight:900;font-size:16px;cursor:pointer;box-shadow:0 5px 0 #126331}
+    #${ROOT} .music{position:fixed;top:16px;left:16px;width:48px;height:48px;border:2px solid #f4c66b;border-radius:50%;background:#432310;color:#fff;font-size:20px;cursor:pointer;z-index:3}@keyframes vsin{from{opacity:0}to{opacity:1}}@keyframes vspop{from{opacity:0;transform:translateY(35px) scale(.75)}to{opacity:1;transform:none}}@keyframes vspulse{to{transform:scale(1.08) rotate(-5deg)}}
+    @media(max-width:650px){#${ROOT} .player{width:42vw;min-width:130px;padding:9px 6px}#${ROOT} .players{gap:7px;max-height:70vh}}
+  `;document.head.appendChild(s)}
+  function root(){style();let r=document.getElementById(ROOT);if(r)return r;r=document.createElement('div');r.id=ROOT;r.innerHTML=`<div class="wood"></div><main class="wrap"><div class="title">⚔️ آماده‌ی نبرد!</div><div class="players" id="vsPlayers"></div><div class="sub">بازی تا چند لحظه‌ی دیگر شروع می‌شود <span class="count" id="vsCount">5</span></div><button class="skip" id="vsSkip">🎮 ورود به بازی</button></main><button class="music" id="vsMusic">🔊</button>`;document.body.appendChild(r);const a=document.createElement('audio');a.id=AUDIO;a.src='/audio/vs.mp3';a.loop=true;a.preload='auto';r.appendChild(a);r.querySelector('#vsMusic').onclick=()=>{if(a.paused){a.play().catch(()=>{});r.querySelector('#vsMusic').textContent='🔊'}else{a.pause();r.querySelector('#vsMusic').textContent='🔇'}};r.querySelector('#vsSkip').onclick=finish;return r}
+  function playersOf(d){let p=d?.players||d?.room?.players||d?.data?.players;return Array.isArray(p)?p.filter(Boolean):[]}
+  function show(d){
+    const ps=playersOf(d), count=Math.max(2,Number(d?.playerCount)||ps.length||2);lastRoom=d?.roomId||d?.room?.roomId||lastRoom;
+    if(ps.length<2){if(count<2)return;return showPlaceholders(count)}
+    render(ps,count);
   }
-  function normalizePlayers(state){const ps=state?.players||state?.room?.players||[];return Array.isArray(ps)?ps.filter(Boolean):[]}
-  function show(state){
-    const players=normalizePlayers(state); if(players.length<2)return;
-    const root=getRoot(),list=root.querySelector("#mvsPlayers"); list.innerHTML="";
-    players.forEach((p,i)=>{const card=document.createElement("section");card.className="mvs-player";card.innerHTML=`<div class="mvs-avatar">${esc(p.avatar||"🐔")}</div><div class="mvs-name">${esc(p.name||"بازیکن")}</div><div class="mvs-badge">${i===0?"بازیکن اول":"بازیکن"}</div>`;list.appendChild(card);if(i<players.length-1&&players.length===2){const vs=document.createElement("div");vs.className="mvs-vs";vs.textContent="VS";list.appendChild(vs)}});
-    root.querySelector("#mvsCount").textContent=`(${players.length} نفره)`;
-    root.classList.add("show");active=true;
-    const music=root.querySelector("#"+MUSIC_ID);music.play().catch(()=>{});
-    clearTimeout(hideTimer);let left=5;const timer=root.querySelector("#mvsTimer");if(timer)timer.textContent=left;
-    const tick=setInterval(()=>{if(!active){clearInterval(tick);return}left--;if(timer)timer.textContent=Math.max(0,left);if(left<=0)clearInterval(tick)},1000);
-    hideTimer=setTimeout(hide,5200);
-  }
-  function hide(){clearTimeout(hideTimer);const root=document.getElementById(ROOT_ID);if(!root)return;root.classList.remove("show");active=false}
-  function socket(){return window.__MORG_SOCKET__||window.socket||null}
-  function bind(s){if(!s||s.__morgVsBound)return;s.__morgVsBound=true;s.on("gameStarted",d=>{if(d?.roomId)s.emit("getGameState",{roomId:d.roomId});setTimeout(()=>{if(!active&&d?.roomId)s.emit("getGameState",{roomId:d.roomId})},100)});s.on("gameState",d=>{if(!active)show(d)});s.on("joinExistingGame",d=>{if(d?.room&&d.mode!=="watcher")show(d.room)})}
-  function watch(){const s=socket();if(s)bind(s)}watch();setInterval(watch,500);window.MorgdoniVS={show,hide};
+  function showPlaceholders(count){const ps=Array.from({length:count},(_,i)=>({name:`بازیکن ${i+1}`,avatar:i===0?'🐔':'🐓'}));render(ps,count)}
+  function render(ps,count){const r=root(),box=r.querySelector('#vsPlayers');box.innerHTML='';ps.forEach((p,i)=>{const c=document.createElement('section');c.className='player';c.style.animationDelay=(i*.07)+'s';c.innerHTML=`<div class="avatar">${esc(p.avatar||'🐔')}</div><div class="name">${esc(p.name||'بازیکن '+(i+1))}</div><div class="badge">${i===0?'بازیکن اول':'بازیکن'}</div>`;box.appendChild(c);if(i===0&&ps.length===2){const v=document.createElement('div');v.className='vs';v.textContent='VS';box.appendChild(v)}});r.querySelector('#vsCount').textContent='5';r.classList.add('on');active=true;const a=r.querySelector('#'+AUDIO);a.play().catch(()=>{});clearTimeout(timer);let n=5;const el=r.querySelector('#vsCount');const iv=setInterval(()=>{if(!active){clearInterval(iv);return}n--;el.textContent=Math.max(0,n);if(n<=0)clearInterval(iv)},1000);timer=setTimeout(finish,5200)}
+  function finish(){clearTimeout(timer);active=false;document.getElementById(ROOT)?.classList.remove('on');const s=sock();if(lastRoom){sessionStorage.setItem('morgdoniRoom',lastRoom);if(s)s.emit('getGameState',{roomId:lastRoom});const current=new URL(location.href);if(!current.searchParams.get('room')){current.searchParams.set('room',lastRoom);history.replaceState({},'',current)}}}
+  function bind(){const s=sock();if(!s||s.__morgVSBound)return;s.__morgVSBound=true;s.on('quickGameFound',d=>{lastRoom=d?.roomId||lastRoom;show(d);setTimeout(()=>{const x=sock();if(x&&lastRoom)x.emit('getGameState',{roomId:lastRoom})},80)});s.on('gameStarted',d=>{if(d?.roomId){lastRoom=d.roomId;const x=sock();if(x)x.emit('getGameState',{roomId:lastRoom})}});s.on('gameState',d=>{const rid=d?.roomId||d?.room?.roomId;if(rid&&(!active||rid===lastRoom))show(d)});s.on('joinExistingGame',d=>{if(d?.room){lastRoom=d.roomId||d.room.roomId;show(d.room)}})}
+  bind();setInterval(bind,350);window.MorgdoniVS={show,hide:finish};
 })();
