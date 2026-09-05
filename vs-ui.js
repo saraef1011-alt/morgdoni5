@@ -11,8 +11,7 @@
   }
   function addStyle() {
     if (document.getElementById(STYLE_ID)) return;
-    const s = document.createElement("style");
-    s.id = STYLE_ID;
+    const s = document.createElement("style"); s.id = STYLE_ID;
     s.textContent = `
       #${ROOT_ID}{position:fixed;inset:0;z-index:2147483000;display:none;align-items:center;justify-content:center;overflow:hidden;background:radial-gradient(circle at 50% 35%,#6b3b1f 0,#28150c 52%,#0d0704 100%);color:#fff;direction:rtl}
       #${ROOT_ID}.show{display:flex;animation:mvsFadeIn .45s ease-out both}
@@ -32,31 +31,25 @@
       #${ROOT_ID} .mvs-music{position:fixed;top:18px;left:18px;border:2px solid #f4c66b;border-radius:50%;width:50px;height:50px;background:#432310;color:#fff;font-size:21px;cursor:pointer;z-index:3}
       @keyframes mvsFadeIn{from{opacity:0}to{opacity:1}} @keyframes mvsDrop{from{opacity:0;transform:translateY(-35px) scale(.8)}to{opacity:1;transform:none}} @keyframes mvsPlayer{from{opacity:0;transform:translateY(40px) scale(.7)}to{opacity:1;transform:none}} @keyframes mvsPulse{to{transform:rotate(-6deg) scale(1.08)}}
       @media(max-width:700px){#${ROOT_ID} .mvs-player{width:42vw;min-width:135px;padding:10px 7px}#${ROOT_ID} .mvs-players{gap:8px;max-height:70vh;overflow:auto;padding:5px}.mvs-sub{margin-top:12px}}
-    `;
-    document.head.appendChild(s);
+    `; document.head.appendChild(s);
   }
   function getRoot(){
-    addStyle();
-    let root=document.getElementById(ROOT_ID);
-    if(root)return root;
+    addStyle(); let root=document.getElementById(ROOT_ID); if(root)return root;
     root=document.createElement("div");root.id=ROOT_ID;
     root.innerHTML=`<div class="mvs-wood"></div><div class="mvs-wrap"><div class="mvs-title">⚔️ آماده‌ی نبرد؟</div><div class="mvs-players" id="mvsPlayers"></div><div class="mvs-sub">نبرد مرغ‌دونی تا چند لحظه‌ی دیگر شروع می‌شود... <span class="mvs-count" id="mvsCount"></span></div><button class="mvs-skip" id="mvsSkip">🎮 ورود به بازی</button></div><button class="mvs-music" id="mvsMusicBtn">🔊</button>`;
     document.body.appendChild(root);
     const music=document.createElement("audio");music.id=MUSIC_ID;music.src="/audio/vs.mp3";music.preload="auto";music.loop=true;root.appendChild(music);
     root.querySelector("#mvsMusicBtn").onclick=()=>{if(music.paused){music.play().catch(()=>{});root.querySelector("#mvsMusicBtn").textContent="🔊"}else{music.pause();root.querySelector("#mvsMusicBtn").textContent="🔇"}};
-    root.querySelector("#mvsSkip").onclick=hide;
-    return root;
+    root.querySelector("#mvsSkip").onclick=hide; return root;
   }
   function normalizePlayers(state){const ps=state?.players||state?.room?.players||[];return Array.isArray(ps)?ps.filter(Boolean):[]}
   function show(state){
-    const players=normalizePlayers(state);if(players.length<2)return;
-    const root=getRoot(),list=root.querySelector("#mvsPlayers");list.innerHTML="";
+    const players=normalizePlayers(state);if(players.length<2)return;const root=getRoot(),list=root.querySelector("#mvsPlayers");list.innerHTML="";
     players.forEach((p,i)=>{const card=document.createElement("section");card.className="mvs-player";card.innerHTML=`<div class="mvs-avatar">${esc(p.avatar||"🐔")}</div><div class="mvs-name">${esc(p.name||"بازیکن")}</div><div class="mvs-badge">${i===0?"بازیکن اول":"بازیکن"}</div>`;list.appendChild(card);if(i<players.length-1&&players.length<=2){const vs=document.createElement("div");vs.className="mvs-vs";vs.textContent="VS";list.appendChild(vs)}});
-    root.querySelector("#mvsCount").textContent=`(${players.length} نفره)`;
-    root.classList.add("show");active=true;const music=root.querySelector("#"+MUSIC_ID);music.play().catch(()=>{});clearTimeout(hideTimer);hideTimer=setTimeout(hide,3600);
+    root.querySelector("#mvsCount").textContent=`(${players.length} نفره)`;root.classList.add("show");active=true;const music=root.querySelector("#"+MUSIC_ID);music.play().catch(()=>{});clearTimeout(hideTimer);hideTimer=setTimeout(hide,3600);
   }
   function hide(){clearTimeout(hideTimer);const root=document.getElementById(ROOT_ID);if(!root)return;root.classList.remove("show");active=false}
   function socket(){return window.__MORG_SOCKET__||window.socket||null}
-  function bind(s){if(!s||s.__morgVsBound)return;s.__morgVsBound=true;s.on("gameStarted",d=>{if(d?.roomId)s.emit("getGameState",{roomId:d.roomId});setTimeout(()=>{if(!active&&d?.roomId)s.emit("getGameState",{roomId:d.roomId})},100)});s.on("gameState",d=>{if(!active)show(d)});s.on("joinExistingGame",d=>{if(d?.room)show(d.room)})}
+  function bind(s){if(!s||s.__morgVsBound)return;s.__morgVsBound=true;s.on("gameStarted",d=>{if(d?.roomId)s.emit("getGameState",{roomId:d.roomId});setTimeout(()=>{if(!active&&d?.roomId)s.emit("getGameState",{roomId:d.roomId})},100)});s.on("gameState",d=>{if(!active)show(d)});s.on("joinExistingGame",d=>{if(d?.room&&d.mode!=="watcher")show(d.room)})}
   function watch(){const s=socket();if(s)bind(s)}watch();setInterval(watch,500);window.MorgdoniVS={show,hide};
 })();
