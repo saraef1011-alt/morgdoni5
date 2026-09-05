@@ -24,6 +24,17 @@
 const q=new URLSearchParams(location.search);document.getElementById('p1').textContent=q.get('p1')||'بازیکن ۱';document.getElementById('p2').textContent=q.get('p2')||'بازیکن ۲';
 const music=document.getElementById('vsMusic');function playMusic(){music.play().catch(()=>{})}document.addEventListener('click',playMusic,{once:true});
 function toggleMusic(){if(music.paused){music.play();document.getElementById('mute').textContent='🔊'}else{music.pause();document.getElementById('mute').textContent='🔇'}}
-function startGame(){location.href='/index.html'+location.search}
+
+// مهم: از VS یک صفحهٔ بازی جدید نساز؛ به همان صفحه‌ای که VS را باز کرده بود برگرد
+// تا WebSocket و اتاق فعلی قطع نشوند.
+function returnToGame(){
+  if(history.length>1){
+    history.back();
+  }else{
+    const room=q.get('room');
+    location.href=room?('/?room='+encodeURIComponent(room)):'/';
+  }
+}
+function startGame(){returnToGame()}
 </script>
 </body></html>
