@@ -1,4 +1,4 @@
-name: Attach card image fix
+name: Attach game feature scripts
 on:
   push:
     branches: [main]
@@ -10,20 +10,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inject card fix script
+      - name: Connect feature scripts to the real game page
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('index.html')
           s = p.read_text(encoding='utf-8')
-          tag = '<script src="/morgdoni-card-fix.js"></script>'
-          if tag not in s:
-              marker = '</head>'
-              if marker in s:
-                  s = s.replace(marker, tag + '\n' + marker, 1)
-              else:
-                  s = tag + '\n' + s
-              p.write_text(s, encoding='utf-8')
+          tags = [
+              '<script src="/morgdoni-card-fix.js?v=direct"></script>',
+              '<script src="/quick-game-ui.js?v=direct"></script>',
+              '<script src="/mega-features.js?v=direct"></script>'
+          ]
+          marker = '</head>'
+          if marker in s:
+              block = '\n'.join(t for t in tags if t not in s) + ('\n' if any(t not in s for t in tags) else '')
+              if block:
+                  s = s.replace(marker, block + marker, 1)
+                  p.write_text(s, encoding='utf-8')
           PY
       - name: Commit change
         run: |
@@ -31,5 +34,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
           git diff --cached --quiet && exit 0
-          git commit -m 'Connect original game page to PNG cards'
+          git commit -m 'Connect game features directly to index'
           git push
