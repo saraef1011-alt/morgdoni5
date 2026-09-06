@@ -10,40 +10,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inline feature scripts into the real game page
+      - name: Embed feature code into the main game page
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
-
-          page = Path('index.html')
-          s = page.read_text(encoding='utf-8')
-
-          # Remove old generated inline blocks so this workflow is idempotent.
-          s = re.sub(r'\n<!-- MORGDONI INLINE FEATURES START -->.*?<!-- MORGDONI INLINE FEATURES END -->\n?', '\n', s, flags=re.S)
-
-          blocks = []
-          for name in ('mega-features.js',):
-              p = Path(name)
+          page=Path('index.html'); s=page.read_text(encoding='utf-8')
+          s=re.sub(r'\n<!-- MORGDONI INLINE FEATURES START -->.*?<!-- MORGDONI INLINE FEATURES END -->\n?','\n',s,flags=re.S)
+          # Remove old external feature loaders. The code below is embedded directly in index.html.
+          s=re.sub(r'\s*<script[^>]+src=["\']/[^"\']*(?:quick-game-ui|mega-features|feature-bootstrap)\.js[^>]*></script>','',s,flags=re.I)
+          blocks=[]
+          for name in ('quick-game-ui.js','mega-features.js'):
+              p=Path(name)
               if p.exists():
-                  code = p.read_text(encoding='utf-8')
-                  # Keep a literal closing-script sequence from breaking the HTML parser.
-                  code = code.replace('</script>', '<\\/script>')
+                  code=p.read_text(encoding='utf-8').replace('</script>','<\\/script>')
                   blocks.append(f'<!-- INLINE {name} -->\n<script>\n{code}\n</script>')
-
-          if blocks:
-              block = '\n<!-- MORGDONI INLINE FEATURES START -->\n' + '\n'.join(blocks) + '\n<!-- MORGDONI INLINE FEATURES END -->\n'
-              if '</head>' in s:
-                  s = s.replace('</head>', block + '</head>', 1)
-              else:
-                  s += block
-              page.write_text(s, encoding='utf-8')
+          block='\n<!-- MORGDONI INLINE FEATURES START -->\n'+ '\n'.join(blocks) +'\n<!-- MORGDONI INLINE FEATURES END -->\n'
+          if '</head>' in s: s=s.replace('</head>',block+'</head>',1)
+          else: s+=block
+          page.write_text(s,encoding='utf-8')
           PY
-      - name: Commit inline page
+      - name: Commit embedded page
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
           git diff --cached --quiet && exit 0
-          git commit -m 'Embed game features directly in index'
+          git commit -m 'Embed Quick Game and player features in index'
           git push
