@@ -1,0 +1,49 @@
+name: Inline game features
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  inline:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inline feature scripts into the real game page
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          page = Path('index.html')
+          s = page.read_text(encoding='utf-8')
+
+          # Remove old generated inline blocks so this workflow is idempotent.
+          s = re.sub(r'\n<!-- MORGDONI INLINE FEATURES START -->.*?<!-- MORGDONI INLINE FEATURES END -->\n?', '\n', s, flags=re.S)
+
+          blocks = []
+          for name in ('mega-features.js',):
+              p = Path(name)
+              if p.exists():
+                  code = p.read_text(encoding='utf-8')
+                  # Keep a literal closing-script sequence from breaking the HTML parser.
+                  code = code.replace('</script>', '<\\/script>')
+                  blocks.append(f'<!-- INLINE {name} -->\n<script>\n{code}\n</script>')
+
+          if blocks:
+              block = '\n<!-- MORGDONI INLINE FEATURES START -->\n' + '\n'.join(blocks) + '\n<!-- MORGDONI INLINE FEATURES END -->\n'
+              if '</head>' in s:
+                  s = s.replace('</head>', block + '</head>', 1)
+              else:
+                  s += block
+              page.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit inline page
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Embed game features directly in index'
+          git push
