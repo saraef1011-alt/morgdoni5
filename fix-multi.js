@@ -32,7 +32,7 @@ export class GameRoom extends MultiGameRoom {
           const rid=makeRoomId(this.data.rooms);
           const r=this.data.rooms[rid]={host:people[0].id,players:people.map(x=>this.player(x)),watchers:[],gameStarted:false,deck:[],eggTokens:18,currentTurn:null,winner:null,discardPile:[]};
           people.forEach(x=>x.status='playing');
-          // مهم: هنوز gameStarted نمی‌فرستیم؛ اول VS نمایش داده می‌شود.
+          // VS باید قبل از شروع بازی نمایش داده شود.
           this.roomBroadcast(r,'quickGameFound',{roomId:rid,playerCount:count,players:r.players,vsSeconds:5});
           this.updateList(); await this.save();
           // بعد از VS بازی را روی همان Room شروع می‌کنیم.
@@ -67,6 +67,7 @@ export default {async fetch(request,env,ctx){
   if(!type.includes('text/html'))return response;
   let html=await response.text();
   html=html.replace(/<script[^>]+(?:quick-game-ui|vs-ui)\.js[^>]*><\/script>/gi,'');
-  html=html.replace(/<\/body>/i,'<script src="/quick-game-ui.js?v=fix2"></script><script src="/vs-ui.js?v=fix2"></script></body>');
+  // v=fix3 عمداً تغییر داده شده تا Cloudflare تغییر جدید را به‌عنوان deploy جدید بگیرد.
+  html=html.replace(/<\/body>/i,'<script src="/quick-game-ui.js?v=fix3"></script><script src="/vs-ui.js?v=fix3"></script></body>');
   return new Response(html,{status:response.status,headers:new Headers(response.headers)});
 }};
