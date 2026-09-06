@@ -29,10 +29,22 @@
   function cancel(){const s=getSocket();if(s)s.emit('cancelQuickGame');remove()}
   function openVS(d){
     if(!d?.roomId)return;
-    const players=Array.isArray(d.players)?d.players:[];
-    try{sessionStorage.setItem('morgdoniRoom',d.roomId)}catch{}
-    const qs=new URLSearchParams();qs.set('room',d.roomId);if(players.length)qs.set('players',JSON.stringify(players.map(p=>({name:p.name||p.username||'بازیکن',avatar:p.avatar||'🐔'}))));
-    remove();location.href='/vs.html?'+qs.toString();
+    try{sessionStorage.setItem('morgdoniRoom',d.roomId);sessionStorage.setItem('morgdoniVS',JSON.stringify(d))}catch{}
+    remove();
+    // مهم: به vs.html نرو؛ چون رویداد quickGameFound همان لحظه مصرف می‌شود و
+    // بعد از رفتن به صفحه جدید، صفحه VS دیگر آن رویداد را دریافت نمی‌کند.
+    // VS را مستقیم روی همین صفحه باز می‌کنیم.
+    if(window.MorgdoniVS?.show){
+      window.MorgdoniVS.show(d);
+      return;
+    }
+    // اگر vs-ui هنوز لود نشده، کمی صبر کن و دوباره تلاش کن.
+    let tries=0;
+    const wait=setInterval(()=>{
+      tries++;
+      if(window.MorgdoniVS?.show){clearInterval(wait);window.MorgdoniVS.show(d)}
+      else if(tries>=20)clearInterval(wait);
+    },100);
   }
   function bind(){
     const s=getSocket();if(!s||s.__morgQuickBound)return;s.__morgQuickBound=true;socketRef=s;
