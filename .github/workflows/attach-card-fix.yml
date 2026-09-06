@@ -1,38 +1,29 @@
-name: Attach game feature scripts
+name: Keep game page clean
 on:
   push:
     branches: [main]
 permissions:
   contents: write
 jobs:
-  attach:
+  clean:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Connect feature scripts to the real game page
+      - name: Remove old external feature tags
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('index.html')
-          s = p.read_text(encoding='utf-8')
-          tags = [
-              '<script src="/morgdoni-card-fix.js?v=direct"></script>',
-              '<script src="/quick-game-ui.js?v=direct"></script>',
-              '<script src="/mega-features.js?v=direct"></script>'
-          ]
-          marker = '</head>'
-          if marker in s:
-              block = '\n'.join(t for t in tags if t not in s) + ('\n' if any(t not in s for t in tags) else '')
-              if block:
-                  s = s.replace(marker, block + marker, 1)
-                  p.write_text(s, encoding='utf-8')
+          import re
+          p=Path('index.html'); s=p.read_text(encoding='utf-8')
+          s=re.sub(r'\s*<script[^>]+src=["\']/[^"\']*(?:quick-game-ui|mega-features|feature-bootstrap)\.js[^>]*></script>','',s,flags=re.I)
+          p.write_text(s,encoding='utf-8')
           PY
-      - name: Commit change
+      - name: Commit cleanup
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
           git diff --cached --quiet && exit 0
-          git commit -m 'Connect game features directly to index'
+          git commit -m 'Remove external feature script tags'
           git push
