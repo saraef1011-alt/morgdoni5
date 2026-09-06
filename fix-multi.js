@@ -34,7 +34,9 @@ export class GameRoom extends MultiGameRoom {
           people.forEach(x=>x.status='playing');
           this.roomBroadcast(r,'quickGameFound',{roomId:rid,playerCount:count,players:r.players,vsSeconds:5});
           this.updateList(); await this.save();
-          setTimeout(async()=>{try{await this.ready;if(!this.data.rooms[rid]||this.data.rooms[rid].gameStarted)return;this.startGame(rid);await this.save()}catch(e){console.error('quick VS start',e)}},5200);
+          // مهم: بازی را تا بعد از کامل شدن VS شروع نکن.
+          // این فاصله عمداً بیشتر از تایمر ۵ ثانیه‌ای کلاینت است.
+          setTimeout(async()=>{try{await this.ready;if(!this.data.rooms[rid]||this.data.rooms[rid].gameStarted)return;this.startGame(rid);await this.save()}catch(e){console.error('quick VS start',e)}},8500);
           return;
         }
       }
@@ -55,7 +57,6 @@ export class GameRoom extends MultiGameRoom {
         if(r.gameStarted){for(let i=0;i<4&&r.deck?.length;i++)np.hand.push(r.deck.pop());r.players.push(np);target.status='playing';this.send(id,'joinExistingGame',{roomId:requesterRoom.roomId,room:r,mode:'player'});}else{r.players.push(np);target.status='room';this.send(id,'roomJoined',{roomId:requesterRoom.roomId,playerCount:r.players.length,maxPlayers:MAX_PLAYERS});}
         this.roomBroadcast(r,'roomUpdate',r);this.roomBroadcast(r,'gameState',r);this.updateList();await this.save();return;
       }
-      // بازی مستقیم دو نفره با درخواست/قبول: اول VS، سپس شروع بازی.
       if(!targetRoom&&!requesterRoom){
         const rid=makeRoomId(this.data.rooms);
         const r=this.data.rooms[rid]={host:req.id,players:[this.player(req),this.player(target)],watchers:[],gameStarted:false,deck:[],eggTokens:18,currentTurn:null,winner:null,discardPile:[]};
@@ -75,6 +76,6 @@ export default {async fetch(request,env,ctx){
   if(!type.includes('text/html'))return response;
   let html=await response.text();
   html=html.replace(/<script[^>]+(?:quick-game-ui|vs-ui)\.js[^>]*><\/script>/gi,'');
-  html=html.replace(/<\/body>/i,'<script src="/quick-game-ui.js?v=fix3"></script><script src="/vs-ui.js?v=fix3"></script></body>');
+  html=html.replace(/<\/body>/i,'<script src="/quick-game-ui.js?v=fix5"></script><script src="/vs-ui.js?v=fix5"></script></body>');
   return new Response(html,{status:response.status,headers:new Headers(response.headers)});
 }};
