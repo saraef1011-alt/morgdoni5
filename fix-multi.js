@@ -90,7 +90,7 @@ export default {async fetch(request,env,ctx){
   let html=await response.text();
   html=html.replace(/<script[^>]+(?:quick-game-ui|vs-ui)\.js[^>]*><\/script>/gi,'');
   const inlineVS='<script id="morgdoni-inline-vs">'+INLINE_VS+'</script>';
-  const mega='<script src="/morgdoni-mega.js?v=1"></script>';
-  html=html.replace(/<\/body>/i,inlineVS+'<script src="/quick-game-ui.js?v=fix6"></script>'+mega+'</body>');
+  const mega='<script src="/mega-features.js?v=2"></script>';
+  html=html.replace(/<\/body>/i,inlineVS+'<script src="/quick-game-ui.js?v=fix7"></script>'+mega+'</body>');
   return new Response(html,{status:response.status,headers:new Headers(response.headers)});
 }};
