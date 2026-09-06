@@ -2,7 +2,7 @@
   'use strict';
   const ROOT='morg-quick-overlay';
   let selected=2, searching=false, socketRef=null;
-  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c));
+  const esc=v=>String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]||c));
   function getSocket(){
     if(socketRef && socketRef.ws && socketRef.ws.readyState===3) socketRef=null;
     const s=window.__MORG_SOCKET__||window.socket||socketRef;
@@ -31,20 +31,17 @@
     if(!d?.roomId)return;
     try{sessionStorage.setItem('morgdoniRoom',d.roomId);sessionStorage.setItem('morgdoniVS',JSON.stringify(d))}catch{}
     remove();
-    // مهم: به vs.html نرو؛ چون رویداد quickGameFound همان لحظه مصرف می‌شود و
-    // بعد از رفتن به صفحه جدید، صفحه VS دیگر آن رویداد را دریافت نمی‌کند.
-    // VS را مستقیم روی همین صفحه باز می‌کنیم.
-    if(window.MorgdoniVS?.show){
-      window.MorgdoniVS.show(d);
-      return;
-    }
-    // اگر vs-ui هنوز لود نشده، کمی صبر کن و دوباره تلاش کن.
-    let tries=0;
-    const wait=setInterval(()=>{
-      tries++;
-      if(window.MorgdoniVS?.show){clearInterval(wait);window.MorgdoniVS.show(d)}
-      else if(tries>=20)clearInterval(wait);
-    },100);
+    const old=document.getElementById('morg-direct-vs');if(old)old.remove();
+    const ps=Array.isArray(d.players)?d.players:[];
+    const count=Math.max(2,Number(d.playerCount)||ps.length||2);
+    const v=document.createElement('div');v.id='morg-direct-vs';
+    v.style.cssText='position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;overflow:auto;background:radial-gradient(circle at 50% 35%,#7b421f,#28150c 55%,#0d0704);color:#fff;direction:rtl;font-family:Tahoma,Arial,sans-serif;';
+    const people=ps.length>=2?ps:Array.from({length:count},(_,i)=>({name:'بازیکن '+(i+1),avatar:i?'🐓':'🐔'}));
+    const cards=people.map((p,i)=>`<div style="width:min(220px,25vw);min-width:130px;padding:14px 9px;border:4px solid #e5a43c;border-radius:25px;background:linear-gradient(145deg,#fff3d2,#c87929);color:#3a1908;box-shadow:0 18px 45px #0009;text-align:center"><div style="width:clamp(85px,10vw,130px);height:clamp(85px,10vw,130px);margin:auto;border-radius:50%;display:grid;place-items:center;font-size:60px;background:#f9d27a;border:6px solid #fff0ba">${esc(p.avatar||'🐔')}</div><div style="font-size:clamp(17px,2.2vw,28px);font-weight:1000;margin-top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name||p.username||'بازیکن '+(i+1))}</div><div style="display:inline-block;margin-top:6px;padding:5px 11px;border-radius:20px;background:#6e3214;color:#ffe8b0;font-weight:900;font-size:12px">${i===0?'بازیکن اول':'بازیکن'}</div></div>`).join('<div style="font-size:clamp(55px,9vw,115px);font-weight:1000;font-style:italic;color:#ffd23d;text-shadow:0 7px 0 #8c2b12,0 12px 28px #000;margin:0 8px">VS</div>');
+    v.innerHTML=`<div style="width:min(1450px,95vw);text-align:center"><div style="font-size:clamp(30px,5vw,66px);font-weight:1000;text-shadow:0 6px 0 #4b210d,0 12px 28px #000;margin-bottom:22px">⚔️ آماده‌ی نبرد!</div><div style="display:flex;align-items:center;justify-content:center;gap:clamp(8px,2vw,24px);flex-wrap:wrap;max-height:65vh;overflow:auto;padding:10px">${cards}</div><div style="margin-top:18px;font-size:clamp(16px,2vw,22px);color:#ffe4b0;font-weight:900">بازی تا چند لحظه‌ی دیگر شروع می‌شود <span id="morg-vs-count" style="display:inline-flex;margin-right:8px;min-width:46px;height:46px;border-radius:50%;align-items:center;justify-content:center;background:#ffd23d;color:#4b210d;font-size:22px;font-weight:1000">5</span></div></div>`;
+    document.body.appendChild(v);
+    let n=5;const ce=v.querySelector('#morg-vs-count');const iv=setInterval(()=>{n--;if(ce)ce.textContent=Math.max(0,n);if(n<=0)clearInterval(iv)},1000);
+    setTimeout(()=>{clearInterval(iv);v.remove();const s=getSocket();if(s)s.emit('getGameState',{roomId:d.roomId})},5200);
   }
   function bind(){
     const s=getSocket();if(!s||s.__morgQuickBound)return;s.__morgQuickBound=true;socketRef=s;
