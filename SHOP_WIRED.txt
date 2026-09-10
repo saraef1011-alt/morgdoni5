@@ -1,0 +1,1 @@
+Daily reward/shop feature is implemented in shop-daily.js. The Worker must inject /shop-daily.js into the HTML response.
