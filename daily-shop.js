@@ -47,7 +47,7 @@
     {
       id: "emote_party",
       name: "واکنش جشن",
-      price: 150,
+      price: 100,
       icon: "🎉",
       description: "واکنش ویژه داخل بازی"
     }
