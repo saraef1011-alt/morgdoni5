@@ -12,7 +12,7 @@
     {
       id: "frame_gold",
       name: "قاب طلایی",
-      price: 500,
+      price: 100,
       icon: "🟨",
       description: "قاب ویژه برای پروفایل"
     },
