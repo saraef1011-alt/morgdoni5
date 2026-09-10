@@ -1,5 +1,6 @@
 (()=>{
 'use strict';
+/* DAILY SHOP v2 — wired into the Cloudflare Worker game */
 const ACCOUNT_KEY='md_accountId';
 const ITEMS=[
  {id:'frame_gold',name:'قاب طلایی',icon:'🏆',price:500,desc:'قاب ویژه دور پروفایل'},
