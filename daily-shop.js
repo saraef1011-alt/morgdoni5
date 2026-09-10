@@ -1,0 +1,34 @@
+(()=>{
+'use strict';
+const ACCOUNT_KEY='md_accountId';
+const ITEMS=[
+ {id:'frame_gold',name:'قاب طلایی',icon:'🏆',price:500,desc:'قاب ویژه دور پروفایل'},
+ {id:'back_chicken',name:'پشت کارت مرغی',icon:'🃏',price:350,desc:'پشت کارت مخصوص'},
+ {id:'effect_fire',name:'افکت برد آتشین',icon:'🔥',price:700,desc:'افکت ویژه هنگام برد'},
+ {id:'avatar_fox',name:'آواتار روباه',icon:'🦊',price:250,desc:'آواتار ویژه'},
+ {id:'avatar_rooster',name:'آواتار خروس طلایی',icon:'🐓',price:400,desc:'آواتار ویژه'},
+ {id:'emote_party',name:'واکنش جشن',icon:'🎉',price:150,desc:'واکنش ویژه در بازی'}
+];
+function socket(){return window.__MORG_SOCKET__||window.socket||null}
+function accountId(){return localStorage.getItem(ACCOUNT_KEY)||''}
+function css(){if(document.getElementById('md-shop-css'))return;const s=document.createElement('style');s.id='md-shop-css';s.textContent=`
+#md-shop-btn{position:fixed;left:18px;bottom:18px;z-index:1900;border:0;border-radius:30px;padding:12px 18px;background:linear-gradient(145deg,#f5b642,#e67e22);color:#3b2008;font-weight:900;font-size:15px;cursor:pointer;box-shadow:0 5px 0 #a85c18}
+#md-shop-btn:active{transform:translateY(3px);box-shadow:0 2px 0 #a85c18}
+#md-shop{position:fixed;inset:0;z-index:5000;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);backdrop-filter:blur(5px);padding:15px}
+#md-shop.on{display:flex}#md-shop .box{width:min(720px,96vw);max-height:88vh;overflow:auto;background:linear-gradient(145deg,#fef7e6,#fcf0dd);border:4px solid #d47a2a;border-radius:38px;padding:22px;direction:rtl;box-shadow:0 20px 60px rgba(0,0,0,.55)}
+#md-shop h2{text-align:center;color:#d47a2a;margin:0 0 8px;font-size:28px}#md-shop .wallet{text-align:center;background:#ffecb3;border-radius:25px;padding:12px;font-size:20px;font-weight:900;color:#7b3f00;margin-bottom:12px}
+#md-shop .daily{background:#fff7df;border:2px solid #f2bd64;border-radius:25px;padding:15px;text-align:center;margin-bottom:16px}.daily strong{color:#d47a2a;font-size:20px}.daily button,#md-shop .buy{border:0;border-radius:22px;padding:9px 15px;background:#27ae60;color:#fff;font-weight:900;cursor:pointer;box-shadow:0 3px 0 #1a6b3b}.daily button:disabled,#md-shop .buy:disabled{opacity:.55;cursor:not-allowed}
+#md-shop .items{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.md-item{background:#fffaf0;border:2px solid #f0c27a;border-radius:22px;padding:13px;text-align:center}.md-item .icon{font-size:42px}.md-item .name{font-weight:900;color:#7b3f00}.md-item .desc{font-size:12px;color:#777;min-height:30px;margin:5px}.md-item .price{font-weight:900;color:#e67e22;margin:7px}.md-item.owned{border-color:#2ecc71;background:#f2fff3}.md-close{display:block;margin:18px auto 0;border:0;border-radius:22px;padding:9px 25px;background:#7f8c8d;color:#fff;font-weight:900;cursor:pointer}
+#md-shop .msg{text-align:center;min-height:22px;font-weight:800;color:#7b3f00;margin:5px}
+`;document.head.appendChild(s)}
+function build(){if(document.getElementById('md-shop'))return;css();const b=document.createElement('button');b.id='md-shop-btn';b.textContent='🪙 فروشگاه و جایزه';b.onclick=openShop;document.body.appendChild(b);const o=document.createElement('div');o.id='md-shop';o.innerHTML=`<div class="box"><h2>🪙 فروشگاه مرغ‌دونی</h2><div class="wallet">موجودی: <span id="md-coins">0</span> 🪙</div><div class="daily"><strong>🎁 جایزه روزانه</strong><div id="md-daily-text">هر روز سکه رایگان بگیر!</div><button id="md-claim">دریافت ۱۰۰ سکه</button></div><div class="msg" id="md-msg"></div><div class="items" id="md-items"></div><button class="md-close" id="md-close">بستن</button></div>`;document.body.appendChild(o);o.querySelector('#md-close').onclick=()=>o.classList.remove('on');o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('on')});o.querySelector('#md-claim').onclick=claim;renderItems([])}
+function msg(t){const e=document.getElementById('md-msg');if(e)e.textContent=t||''}
+function render(p){p=p||{};document.getElementById('md-coins').textContent=Number(p.coins||0).toLocaleString('fa-IR');const inv=p.inventory||[];const claim=document.getElementById('md-claim');const today=p.today||new Date().toISOString().slice(0,10);claim.disabled=p.lastDaily===today;claim.textContent=p.lastDaily===today?'✅ جایزه امروز دریافت شد':'🎁 دریافت ۱۰۰ سکه';document.getElementById('md-daily-text').textContent=`روزهای پیاپی: ${Number(p.streak||0).toLocaleString('fa-IR')} 🔥`;renderItems(inv)}
+function renderItems(inv){const root=document.getElementById('md-items');if(!root)return;root.innerHTML=ITEMS.map(x=>{const own=inv.includes(x.id);return `<div class="md-item ${own?'owned':''}"><div class="icon">${x.icon}</div><div class="name">${x.name}</div><div class="desc">${x.desc}</div><div class="price">${x.price.toLocaleString('fa-IR')} 🪙</div><button class="buy" data-buy="${x.id}" ${own?'disabled':''}>${own?'✅ خریداری شده':'خرید'}</button></div>`}).join('');root.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>buy(b.dataset.buy))}
+function openShop(){build();document.getElementById('md-shop').classList.add('on');const s=socket();if(s)s.emit('shopGet',{accountId:accountId()});else msg('اتصال به سرور برقرار نیست')}
+function claim(){const s=socket();if(s)s.emit('shopClaimDaily',{accountId:accountId()});}
+function buy(itemId){const s=socket();if(s)s.emit('shopBuy',{accountId:accountId(),itemId});}
+function bind(){const s=socket();if(!s||s.__mdShopBound)return;s.__mdShopBound=true;s.on('shopData',render);s.on('shopResult',d=>{if(d?.profile)render(d.profile);msg(d?.message||'')});s.on('shopError',e=>msg(e||'خطا'));}
+function start(){build();bind();setInterval(bind,500)}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
+})();
